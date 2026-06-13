@@ -191,19 +191,15 @@ def scan(
 
     Environment variables:
 
-        SKILLSPECTOR_PROVIDER  Active LLM provider: openai | anthropic |
-                               nv_build | nv_inference. Defaults to the
-                               NVIDIA path (nv_inference, falling back to
-                               nv_build in OSS builds).
-        SKILLSPECTOR_MODEL     Override the active provider's default
-                               model (applies to every analyzer slot).
-        SKILLSPECTOR_LOG_LEVEL DEBUG | INFO | WARNING | ERROR (default WARNING).
+        ANTHROPIC_VERTEX_PROJECT_ID  GCP project for Vertex AI Claude (required for LLM mode).
+        CLOUD_ML_REGION              Vertex AI region (default: global).
+        SKILLSPECTOR_MODEL           Override the default model (applies to every analyzer slot).
+        SKILLSPECTOR_LOG_LEVEL       DEBUG | INFO | WARNING | ERROR (default WARNING).
 
-    Provider credentials (one of):
+    Authentication:
 
-        OPENAI_API_KEY [+ OPENAI_BASE_URL]   for SKILLSPECTOR_PROVIDER=openai
-        ANTHROPIC_API_KEY                    for SKILLSPECTOR_PROVIDER=anthropic
-        NVIDIA_INFERENCE_KEY                 for the NVIDIA providers
+        Uses Google Application Default Credentials (ADC).
+        Run: gcloud auth application-default login
     """
     result = None
     try:

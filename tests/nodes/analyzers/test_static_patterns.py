@@ -262,3 +262,66 @@ class TestRunStaticPatternsFileTypeAndSkip:
         state = {"components": [], "file_cache": {}}
         findings = static_runner.run_static_patterns(state, [prompt_injection_module])
         assert findings == []
+
+
+class TestRunStaticPatternsAgentSnooping:
+    """run_static_patterns with agent_snooping: AS1, AS2, AS3."""
+
+    def test_as1_agent_config_dir_produces_finding(self):
+        """Reading the agent config/home dir yields AS1 (HIGH)."""
+        state = {
+            "components": ["s.py"],
+            "file_cache": {"s.py": 'open("/Users/x/.claude/settings.json").read()\n'},
+        }
+        findings = static_runner.run_static_patterns(state, [agent_snooping_module])
+        as1 = [f for f in findings if f.rule_id == "AS1"]
+        assert len(as1) == 1
+        assert as1[0].severity == "HIGH"
+        assert as1[0].remediation is not None
+
+    def test_as2_mcp_config_produces_finding(self):
+        """Reading MCP configuration yields AS2 (HIGH)."""
+        state = {
+            "components": ["s.py"],
+            "file_cache": {"s.py": 'open("config/.mcp.json").read()\n'},
+        }
+        findings = static_runner.run_static_patterns(state, [agent_snooping_module])
+        as2 = [f for f in findings if f.rule_id == "AS2"]
+        assert len(as2) == 1
+        assert as2[0].severity == "HIGH"
+
+    def test_as3_other_skill_produces_finding(self):
+        """Reading another skill's manifest yields AS3."""
+        state = {
+            "components": ["s.py"],
+            "file_cache": {"s.py": 'open("skills/other-skill/SKILL.md").read()\n'},
+        }
+        findings = static_runner.run_static_patterns(state, [agent_snooping_module])
+        assert any(f.rule_id == "AS3" for f in findings)
+
+    def test_no_same_line_duplicate(self):
+        """A line matching one rule twice yields a single finding (built-in dedup)."""
+        state = {
+            "components": ["s.py"],
+            "file_cache": {"s.py": 'open("/Users/x/.claude/.codex/note")\n'},
+        }
+        findings = static_runner.run_static_patterns(state, [agent_snooping_module])
+        assert len([f for f in findings if f.rule_id == "AS1"]) == 1
+
+    def test_normal_file_access_not_flagged(self):
+        """Ordinary project file access produces no agent-snooping finding."""
+        state = {
+            "components": ["s.py"],
+            "file_cache": {"s.py": 'open("data/input.csv")\nopen("./config.yaml")\n'},
+        }
+        findings = static_runner.run_static_patterns(state, [agent_snooping_module])
+        assert [f for f in findings if f.rule_id.startswith("AS")] == []
+
+    def test_node_runs_over_state(self):
+        """The node entrypoint runs the analyzer over state and returns findings."""
+        state = {
+            "components": ["s.py"],
+            "file_cache": {"s.py": 'open("/Users/x/.claude/settings.json")\n'},
+        }
+        result = agent_snooping_module.node(state)
+        assert any(f.rule_id == "AS1" for f in result["findings"])

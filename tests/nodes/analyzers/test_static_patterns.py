@@ -69,6 +69,31 @@ class TestRunStaticPatternsPromptInjection:
         assert len(findings) >= 1
         assert any(f.rule_id == "P2" for f in findings)
 
+    def test_p2_bidi_control_chars_produce_finding(self):
+        """Bidi control characters (Trojan Source CVE-2021-42574) yield P2."""
+        # ‮ is RIGHT-TO-LEFT OVERRIDE — a bidi control character
+        state = {
+            "components": ["SKILL.md"],
+            "file_cache": {
+                "SKILL.md": "Normal text‮ evil hidden content‬",
+            },
+        }
+        findings = static_runner.run_static_patterns(state, [prompt_injection_module])
+        assert len(findings) >= 1
+        assert any(f.rule_id == "P2" for f in findings)
+
+    def test_p2_bidi_rlo_edge_cases(self):
+        """Bidi override variants ‪-‮ and ⁦-⁩ all yield P2."""
+        bidi_chars = ["‪", "‫", "‬", "‭", "‮", "⁦", "⁧", "⁨", "⁩"]
+        for ch in bidi_chars:
+            state = {
+                "components": ["skill.md"],
+                "file_cache": {"skill.md": f"text{ch}more"},
+            }
+            findings = static_runner.run_static_patterns(state, [prompt_injection_module])
+            p2 = [f for f in findings if f.rule_id == "P2"]
+            assert len(p2) >= 1, f"Expected P2 for bidi char U+{ord(ch):04X}"
+
     def test_safe_content_no_p1_p2(self):
         """Safe content does not produce P1/P2."""
         state = {

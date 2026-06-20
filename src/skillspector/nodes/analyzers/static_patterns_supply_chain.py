@@ -232,6 +232,8 @@ _POPULAR_PYPI: set[str] = {
     "pylint",
     "flake8",
     "isort",
+    "perseus-ctx",
+    "mimir-mcp",
 }
 
 _POPULAR_NPM: set[str] = {

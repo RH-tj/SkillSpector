@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import re
 import sys
+from urllib.parse import urlparse
 
 from skillspector.logging_config import get_logger
 from skillspector.models import AnalyzerFinding, Finding, Location, Severity
@@ -541,11 +542,20 @@ _TRUSTED_DOMAINS: tuple[str, ...] = (
 )
 
 _SAFE_INSTALL_PATTERN = re.compile(r"(?:pip|npm)\s+install", re.IGNORECASE)
+_URL_TOKEN_PATTERN = re.compile(
+    r"https?://[^\s|;&)]+|(?<![?=&/])(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s|;&)]*)?",
+    re.IGNORECASE,
+)
 
 
 def _is_trusted_source(text: str) -> bool:
-    lower = text.lower()
-    return any(d in lower for d in _TRUSTED_DOMAINS)
+    for match in _URL_TOKEN_PATTERN.finditer(text):
+        token = match.group(0).strip("\"'`<>()[]{}")
+        parsed = urlparse(token if "://" in token else f"//{token}")
+        hostname = (parsed.hostname or "").rstrip(".").lower()
+        if any(hostname == domain or hostname.endswith(f".{domain}") for domain in _TRUSTED_DOMAINS):
+            return True
+    return False
 
 
 def _is_safe_supply_chain_pattern(text: str) -> bool:

@@ -743,7 +743,8 @@ def _analyze_dependencies(
             AnalyzerFinding(
                 rule_id="SC4",
                 message=(
-                    "🟡 SC4: OSV.dev unreachable, using static fallback (24 packages). "
+                    f"🟡 SC4: OSV.dev unreachable, using static fallback "
+                    f"({len(fallback_db)} packages). "
                     "Results may be incomplete. Set SKILLSPECTOR_OSV_TIMEOUT to increase "
                     "timeout or check network connectivity to api.osv.dev."
                 ),

@@ -37,7 +37,16 @@ logger = get_logger(__name__)
 
 _OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch"
 _OSV_VULN_URL = "https://api.osv.dev/v1/vulns"
-_REQUEST_TIMEOUT = float(os.environ.get("SKILLSPECTOR_OSV_TIMEOUT", 30.0))
+_REQUEST_TIMEOUT: float = 30.0
+if (env_val := os.environ.get("SKILLSPECTOR_OSV_TIMEOUT")) is not None:
+    try:
+        _REQUEST_TIMEOUT = float(env_val)
+    except ValueError:
+        logger.warning(
+            "SKILLSPECTOR_OSV_TIMEOUT=%r is not numeric, using default %.1fs",
+            env_val,
+            _REQUEST_TIMEOUT,
+        )
 
 # Tracks whether the last query_batch() API call succeeded.
 # Used by the supply-chain analyzer to surface fallback warnings.
@@ -233,6 +242,8 @@ def query_batch(
     Raises nothing — on network/API failure returns empty lists for all
     packages (caller should fall back to static data).
     """
+    global _last_query_ok
+
     if not packages:
         return []
 

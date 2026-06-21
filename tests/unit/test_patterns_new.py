@@ -52,6 +52,7 @@ from skillspector.nodes.analyzers.osv_client import VulnResult
 # ── Helpers ─────────────────────────────────────────────────────────────
 
 _OSV_PATCH_TARGET = "skillspector.nodes.analyzers.static_patterns_supply_chain.query_batch"
+_WAS_OSV_REACHABLE_TARGET = "skillspector.nodes.analyzers.static_patterns_supply_chain.was_osv_reachable"
 
 
 def _make_vuln(
@@ -64,9 +65,15 @@ def _make_vuln(
 
 
 def _analyze_deps(content: str, filename: str, osv_results: list | None = None) -> list:
-    """Run ``_analyze_dependencies`` with a mocked OSV ``query_batch``."""
+    """Run ``_analyze_dependencies`` with a mocked OSV ``query_batch``.
+
+    Patches both ``query_batch`` and ``was_osv_reachable`` to return ``True``
+    so that the fallback warning only fires when tests explicitly simulate
+    an OSV API failure.
+    """
     with patch(_OSV_PATCH_TARGET, return_value=osv_results or [[]]):
-        return sc_mod._analyze_dependencies(content, filename)
+        with patch(_WAS_OSV_REACHABLE_TARGET, return_value=True):
+            return sc_mod._analyze_dependencies(content, filename)
 
 
 # ── Excessive Agency (EA1–EA4) ─────────────────────────────────────────

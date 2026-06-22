@@ -30,8 +30,8 @@ class TestMP2DetectsStuffing:
     """MP2 correctly detects repeated content (context window stuffing)."""
 
     def test_repeated_phrase_detected(self) -> None:
-        """A phrase repeated 25+ times triggers MP2."""
-        content = "AAAA" * 30
+        """A multi-char phrase repeated 25+ times triggers MP2."""
+        content = "ABCD" * 30
         findings = mp_module.analyze(content, "test.md", "markdown")
         mp2 = [f for f in findings if f.rule_id == "MP2"]
         assert len(mp2) >= 1

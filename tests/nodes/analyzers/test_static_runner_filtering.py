@@ -94,6 +94,27 @@ rm -rf /tmp/build-cache
         tm1_findings = [f for f in findings if f.rule_id == "TM1"]
         assert len(tm1_findings) >= 1
 
+    def test_finding_in_executable_not_dropped_by_generic_indicator(self) -> None:
+        """A finding in an executable file is NOT dropped when context contains a generic indicator.
+
+        Validates that an attacker cannot suppress a genuine finding in a .py file
+        by salting nearby code with a comment like '# e.g. usage' or '# Note: ...'
+        """
+        content = """\
+import subprocess
+# Note: this is how we deploy
+result = subprocess.run(cmd, shell=True)
+"""
+        state = {
+            "components": ["deploy.py"],
+            "file_cache": {"deploy.py": content},
+        }
+        findings = static_runner.run_static_patterns(state, [tm_module])
+        tm1_findings = [f for f in findings if f.rule_id == "TM1"]
+        assert len(tm1_findings) >= 1
+        for f in tm1_findings:
+            assert f.confidence > 0
+
     def test_skill_md_findings_are_not_filtered_by_backticks(self) -> None:
         """SKILL.md is the primary instruction file — backticks alone shouldn't filter."""
         content = """\

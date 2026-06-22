@@ -82,6 +82,9 @@ _DOCUMENTATION_DIR_NAMES = (
 )
 
 _DOCUMENTATION_CONFIDENCE_FACTOR = 0.3
+_CODE_EXAMPLE_CONFIDENCE_FACTOR = 0.5
+
+_NON_EXECUTABLE_FILE_TYPES = frozenset({"markdown", "text", "json", "yaml", "toml", "other"})
 
 
 def _is_documentation_markdown(path: str) -> bool:
@@ -159,17 +162,27 @@ def run_static_patterns(
             continue
         file_type = _infer_file_type(path)
         is_doc_markdown = _is_documentation_markdown(path)
+        is_non_executable = file_type in _NON_EXECUTABLE_FILE_TYPES
         for module in pattern_modules:
             raw = module.analyze(content=content, file_path=path, file_type=file_type)
             for af in raw:
                 if af.context and is_code_example(af.context):
+                    if is_non_executable:
+                        logger.debug(
+                            "Filtered code-example finding in non-executable: %s in %s:%d",
+                            af.rule_id,
+                            path,
+                            af.location.start_line,
+                        )
+                        continue
+                    af.confidence *= _CODE_EXAMPLE_CONFIDENCE_FACTOR
                     logger.debug(
-                        "Filtered code-example finding: %s in %s:%d",
+                        "Downweighted code-example finding in executable: %s in %s:%d (conf=%.2f)",
                         af.rule_id,
                         path,
                         af.location.start_line,
+                        af.confidence,
                     )
-                    continue
                 if is_doc_markdown:
                     af.confidence *= _DOCUMENTATION_CONFIDENCE_FACTOR
                 findings.append(analyzer_finding_to_finding(af))

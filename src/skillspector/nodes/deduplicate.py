@@ -97,6 +97,8 @@ def deduplicate(findings: list[Finding]) -> list[Finding]:
         )
 
     severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
-    deduplicated.sort(key=lambda f: (severity_order.get(f.severity, 4), f.file, f.start_line))
+    deduplicated.sort(
+        key=lambda f: (severity_order.get(f.severity.upper(), 4), f.file, f.start_line)
+    )
 
     return deduplicated

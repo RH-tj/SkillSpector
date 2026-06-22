@@ -378,11 +378,10 @@ def _format_markdown(
 def report(state: SkillspectorState) -> dict[str, object]:
     """Generate SARIF, compute risk score, and set report_body from output_format."""
     raw_findings = state.get("filtered_findings", state.get("findings", []))
-    # When use_llm is False, meta_analyzer is skipped; ensure final state has filtered_findings
     if "filtered_findings" not in state:
         raw_findings = state.get("findings", [])
-    findings = deduplicate(raw_findings)
-    filtered_findings = findings
+    findings_for_scoring = deduplicate(raw_findings)
+    filtered_findings = raw_findings
     component_metadata = state.get("component_metadata") or []
     has_executable_scripts = state.get("has_executable_scripts", False)
     manifest = state.get("manifest") or {}
@@ -391,13 +390,13 @@ def report(state: SkillspectorState) -> dict[str, object]:
     use_llm = state.get("use_llm", True)
 
     risk_score, risk_severity, risk_recommendation = _compute_risk_score(
-        findings, has_executable_scripts
+        findings_for_scoring, has_executable_scripts
     )
-    sarif_report = _build_sarif(findings)
+    sarif_report = _build_sarif(filtered_findings)
 
     if output_format == "terminal":
         report_body = _format_terminal(
-            findings,
+            filtered_findings,
             component_metadata,
             manifest,
             skill_path,
@@ -408,7 +407,7 @@ def report(state: SkillspectorState) -> dict[str, object]:
         )
     elif output_format == "json":
         report_body = _format_json(
-            findings,
+            filtered_findings,
             component_metadata,
             manifest,
             skill_path,
@@ -420,7 +419,7 @@ def report(state: SkillspectorState) -> dict[str, object]:
         )
     elif output_format == "markdown":
         report_body = _format_markdown(
-            findings,
+            filtered_findings,
             component_metadata,
             manifest,
             skill_path,

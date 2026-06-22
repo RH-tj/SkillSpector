@@ -501,3 +501,32 @@ class TestReportNode:
         body = result["report_body"]
         json.loads(body)
         assert "sarif_report" in result
+
+    def test_report_dedup_affects_score_only_not_report_output(self) -> None:
+        """Deduplication reduces score but all affected files appear in the report."""
+        duplicated = [
+            Finding(
+                rule_id="TM1",
+                message="shell injection",
+                severity="HIGH",
+                confidence=0.8,
+                file=f"step{i}.py",
+                start_line=10,
+                matched_text="subprocess.run(cmd, shell=True)",
+            )
+            for i in range(4)
+        ]
+        state: SkillspectorState = {
+            "filtered_findings": duplicated,
+            "component_metadata": [],
+            "has_executable_scripts": False,
+            "manifest": {"name": "multi-file"},
+            "skill_path": "/tmp/skill",
+            "output_format": "json",
+        }
+        result = report(state)
+        body = json.loads(result["report_body"])
+        reported_files = {issue["location"]["file"] for issue in body["issues"]}
+        assert reported_files == {"step0.py", "step1.py", "step2.py", "step3.py"}
+        assert len(body["issues"]) == 4
+        assert result["risk_score"] < 4 * 25

@@ -210,7 +210,7 @@ class InputHandler:
         parsed = urlparse(url)
         filename = Path(parsed.path).name or "SKILL.md"
         try:
-            with httpx.Client(follow_redirects=True, timeout=30) as client:
+            with httpx.Client(follow_redirects=False, timeout=30) as client:
                 response = client.get(url)
                 response.raise_for_status()
                 content = response.content

@@ -131,6 +131,22 @@ class TestDownloadSSRF:
         assert result.is_dir()
         handler.cleanup()
 
+    @patch("skillspector.input_handler.httpx.Client")
+    def test_download_does_not_follow_redirects(self, mock_client_cls) -> None:
+        """Redirects are disabled to prevent SSRF via open-redirect on allowed hosts."""
+        mock_client = mock_client_cls.return_value.__enter__.return_value
+        mock_client.get.return_value.content = b"# content"
+        mock_client.get.return_value.headers = {}
+        handler = InputHandler()
+        try:
+            handler._download_file(
+                "https://raw.githubusercontent.com/NVIDIA/SkillSpector/main/SKILL.md"
+            )
+        except Exception:
+            pass
+        mock_client_cls.assert_called_once_with(follow_redirects=False, timeout=30)
+        handler.cleanup()
+
 
 class TestZipSlipPrevention:
     """Zip extraction blocks path traversal attacks."""

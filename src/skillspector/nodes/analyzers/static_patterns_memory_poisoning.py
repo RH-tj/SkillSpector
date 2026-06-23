@@ -183,7 +183,8 @@ def analyze(content: str, file_path: str, file_type: str) -> list[AnalyzerFindin
     for pattern, confidence in MP2_PATTERNS:
         for match in re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE):
             captured = match.group(1) if match.lastindex else match.group(0)
-            if len(set(captured.strip())) <= 1:
+            non_ws_chars = set(captured) - {" ", "\t", "\n", "\r"}
+            if len(non_ws_chars) <= 1 and not any(c in captured for c in (" ", "\t")):
                 continue
             line_num = get_line_number(content, match.start())
             findings.append(

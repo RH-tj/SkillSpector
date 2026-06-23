@@ -17,8 +17,6 @@
 
 from __future__ import annotations
 
-import signal
-import sys
 import time
 
 import pytest
@@ -52,6 +50,20 @@ class TestMP2DetectsStuffing:
             if f.rule_id == "MP2" and "Context Window Stuffing" in f.message
         ]
         assert len(mp2_repetition) == 0
+
+    def test_separator_line_not_detected(self) -> None:
+        """Single-char separators like '=' * 80 should be suppressed."""
+        content = "=" * 80
+        findings = mp_module.analyze(content, "readme.md", "markdown")
+        mp2 = [f for f in findings if f.rule_id == "MP2"]
+        assert len(mp2) == 0
+
+    def test_whitespace_bearing_stuffing_detected(self) -> None:
+        """Repeated tokens containing whitespace (e.g. 'x ' * 30) must not be suppressed."""
+        content = "x " * 30
+        findings = mp_module.analyze(content, "payload.md", "markdown")
+        mp2 = [f for f in findings if f.rule_id == "MP2"]
+        assert len(mp2) >= 1, "Whitespace-bearing stuffing should be detected, not suppressed"
 
 
 class TestMP2NoBacktracking:

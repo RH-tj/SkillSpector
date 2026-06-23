@@ -95,11 +95,17 @@ _PE3_ENV_REFERENCE_CONTEXT = re.compile(
 )
 
 
-def _is_env_file_reference_in_docs(finding: AnalyzerFinding, file_type: str) -> bool:
-    """Return True if a PE3 finding is a documentation reference to .env files, not actual access."""
+def _is_env_file_reference_in_docs(finding: AnalyzerFinding, file_type: str, file_path: str = "") -> bool:
+    """Return True if a PE3 finding is a documentation reference to .env files, not actual access.
+
+    SKILL.md is exempt: it is the agent's primary instruction file, so `.env`
+    references there may be genuine credential-access instructions.
+    """
     if finding.rule_id != "PE3":
         return False
     if file_type not in ("markdown", "text"):
+        return False
+    if file_path.replace("\\", "/").lower().endswith("skill.md"):
         return False
     if not finding.context:
         return False
@@ -221,7 +227,7 @@ def run_static_patterns(
         for module in pattern_modules:
             raw = module.analyze(content=content, file_path=path, file_type=file_type)
             for af in raw:
-                if _is_env_file_reference_in_docs(af, file_type):
+                if _is_env_file_reference_in_docs(af, file_type, path):
                     logger.debug(
                         "Filtered PE3 .env doc reference: %s in %s:%d",
                         af.rule_id, path, af.location.start_line,

@@ -205,6 +205,21 @@ class TestComputeRiskScoreEdgeCases:
         # First TM1: 50*1.0, second TM1: 5*0.5 = 2.5 -> total 52.5 -> 52
         assert score == 52
 
+    def test_same_rule_low_before_critical_sorted_correctly(self) -> None:
+        """LOW before CRITICAL in input order must still score as if CRITICAL came first.
+
+        Without severity sorting, LOW gets the full weight (5*1.0=5) and CRITICAL
+        gets the diminished weight (50*0.5=25), yielding 30. With sorting, CRITICAL
+        gets full weight (50*1.0=50) and LOW gets diminished (5*0.5=2.5), yielding 52.
+        """
+        findings = [
+            _finding("TM1", "LOW", confidence=1.0),
+            _finding("TM1", "CRITICAL", confidence=1.0),
+        ]
+        score, _, _ = _compute_risk_score(findings, False)
+        # Sorted: CRITICAL first (50*1.0) + LOW second (5*0.5=2.5) = 52.5 -> 52
+        assert score == 52
+
     def test_exact_band_boundary_21_is_medium(self) -> None:
         findings = [
             _finding("R1", "MEDIUM", confidence=1.0),

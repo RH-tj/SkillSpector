@@ -1084,6 +1084,70 @@ class TestLLMMetaAnalyzerApplyFilter:
         assert result[0].end_line == 10
         assert result[0].explanation == "Long block is dangerous"
 
+    @patch(MOCK_PATCH_TARGET, _mock_get_chat_model)
+    def test_static_finding_with_none_end_line_confirmed_by_start(self) -> None:
+        """Issue #67: static finding with end_line=None must not be dropped when
+        the LLM confirms the same start_line with an explicit end_line.
+
+        Static analyzers typically emit end_line=None; the LLM always fills it
+        in.  The confirmed_by_start fallback ensures the finding is kept.
+        """
+        analyzer = LLMMetaAnalyzer(model=self.MODEL)
+        # Construct directly — _make_finding converts None to line via `or`.
+        finding = Finding(
+            rule_id="E2",
+            message="env harvest",
+            file="agent.py",
+            start_line=42,
+            end_line=None,
+        )
+        batch = Batch(file_path="agent.py", content="code", findings=[finding])
+        llm_items = [
+            {
+                "pattern_id": "E2",
+                "start_line": 42,
+                "end_line": 42,
+                "is_vulnerability": True,
+                "confidence": 0.88,
+                "explanation": "Harvests all env vars",
+                "remediation": "Use specific env lookups",
+                "_file": "agent.py",
+            }
+        ]
+        result = analyzer.apply_filter([finding], [(batch, llm_items)])
+        assert len(result) == 1, "Static finding with end_line=None must not be dropped"
+        assert result[0].explanation == "Harvests all env vars"
+
+    @patch(MOCK_PATCH_TARGET, _mock_get_chat_model)
+    def test_static_findings_at_different_lines_only_confirmed_kept(self) -> None:
+        """Two static findings (end_line=None) at different start_lines; LLM
+        confirms only one.  The unconfirmed finding must not survive the filter."""
+        analyzer = LLMMetaAnalyzer(model=self.MODEL)
+        f1 = Finding(rule_id="P1", message="override", file="skill.md", start_line=10, end_line=None)
+        f2 = Finding(rule_id="P1", message="override", file="skill.md", start_line=30, end_line=None)
+        batch = Batch(file_path="skill.md", content="code", findings=[f1, f2])
+        llm_items = [
+            {
+                "pattern_id": "P1",
+                "start_line": 10,
+                "end_line": 10,
+                "is_vulnerability": True,
+                "confidence": 0.9,
+                "explanation": "Instruction override at line 10",
+                "_file": "skill.md",
+            },
+            {
+                "pattern_id": "P1",
+                "start_line": 30,
+                "is_vulnerability": False,
+                "confidence": 0.2,
+                "_file": "skill.md",
+            },
+        ]
+        result = analyzer.apply_filter([f1, f2], [(batch, llm_items)])
+        assert len(result) == 1
+        assert result[0].start_line == 10
+
 
 # ---------------------------------------------------------------------------
 # LLMMetaAnalyzer.run_batches (mocked LLM)

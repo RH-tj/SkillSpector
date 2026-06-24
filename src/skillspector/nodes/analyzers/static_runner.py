@@ -69,7 +69,7 @@ def _infer_file_type(path: str) -> str:
 
 
 _BINARY_EXTENSIONS = frozenset({
-    ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg",
+    ".pdf", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico",
     ".woff", ".woff2", ".ttf", ".otf", ".eot",
     ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar",
     ".exe", ".dll", ".so", ".dylib", ".bin", ".o", ".a",

@@ -72,6 +72,11 @@ class TestBinaryFileDetection:
         assert _is_binary_file("photo.JPEG", "data") is True
         assert _is_binary_file("archive.ZIP", "PK") is True
 
+    def test_svg_not_treated_as_binary(self) -> None:
+        """SVG is text/XML and can carry <script> — must be scanned, not skipped."""
+        assert _is_binary_file("icon.svg", '<svg xmlns="http://www.w3.org/2000/svg">') is False
+        assert _is_binary_file("graphic.SVG", "<svg></svg>") is False
+
 
 class TestBinaryFilesSkippedInRunner:
     """run_static_patterns skips binary files entirely."""

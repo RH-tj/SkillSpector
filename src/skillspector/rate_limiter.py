@@ -11,7 +11,9 @@ to set the mode.  If never called, defaults to throttled mode for safety.
 
 Uses ``threading.Semaphore`` (not ``asyncio.Semaphore``) because LangGraph
 runs analyzer nodes in separate threads, each with its own event loop.
-An asyncio semaphore created in one loop cannot be used from another.
+The async path uses non-blocking ``acquire(blocking=False)`` with
+``asyncio.sleep`` polling to avoid exhausting the default thread-pool
+executor when hundreds of coroutines contend for the semaphore.
 """
 
 from __future__ import annotations
@@ -31,6 +33,8 @@ _THROTTLED_CONCURRENCY = 5
 _BACKOFF_BASE = 4.0
 _BACKOFF_MAX = 120.0
 _MAX_RETRIES = 6
+
+_SEM_POLL_INTERVAL = 0.05
 
 _throttled = True
 _concurrency: int = _THROTTLED_CONCURRENCY
@@ -71,9 +75,14 @@ def _is_rate_limit_error(exc: BaseException) -> bool:
 
 
 async def _acquire_async() -> None:
-    """Acquire the threading semaphore without blocking the event loop."""
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _semaphore.acquire)
+    """Acquire the threading semaphore without blocking the event loop.
+
+    Uses non-blocking try-acquire with asyncio.sleep polling instead of
+    run_in_executor, which would deadlock when hundreds of coroutines
+    exhaust the default thread pool all waiting to acquire.
+    """
+    while not _semaphore.acquire(blocking=False):
+        await asyncio.sleep(_SEM_POLL_INTERVAL)
 
 
 def _release() -> None:

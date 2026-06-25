@@ -150,7 +150,36 @@ required to distinguish multiple findings with the same pattern ID in one file.
 For findings you confirm as vulnerabilities, provide an explanation of WHY
 this is dangerous and remediation steps for HOW to fix the issue.
 
-Analyze the findings now:"""
+Analyze the findings now.
+
+## RESPONSE FORMAT
+
+You MUST respond with ONLY a JSON object (no markdown fences, no prose before or after).
+The JSON must conform to this exact schema:
+
+{{
+  "findings": [
+    {{
+      "pattern_id": "<the static analysis pattern ID, e.g. E2, P1>",
+      "start_line": <integer line number from the finding's Location>,
+      "end_line": <integer or null>,
+      "is_vulnerability": <true or false>,
+      "confidence": <float 0.0 to 1.0>,
+      "intent": "<malicious|negligent|benign>",
+      "impact": "<critical|high|medium|low>",
+      "explanation": "<why this is dangerous, 2-3 sentences>",
+      "remediation": "<how to fix, actionable steps>"
+    }}
+  ],
+  "overall_assessment": {{
+    "risk_level": "<LOW|MEDIUM|HIGH|CRITICAL>",
+    "summary": "<brief summary>"
+  }}
+}}
+
+You MUST include ALL findings from the static analysis in your response, even those
+you determine are false positives (set is_vulnerability=false for those).
+Do NOT omit findings. Do NOT wrap the JSON in markdown code fences."""
 
 
 # ---------------------------------------------------------------------------
@@ -253,10 +282,76 @@ class LLMMetaAnalyzer(LLMAnalyzerBase):
 
     def parse_response(
         self,
-        response: MetaAnalyzerResult,
+        response: object,
         batch: Batch,
     ) -> list[dict[str, object]]:
-        """Convert the validated Pydantic response to dicts for ``apply_filter``."""
+        """Convert the validated Pydantic response to dicts for ``apply_filter``.
+
+        Handles both parsed Pydantic objects and raw JSON strings from Vertex AI.
+        """
+        import json
+        import re
+
+        if isinstance(response, str):
+            text = response.strip()
+            if not text:
+                logger.warning("Meta-analyzer: empty response for %s", batch.file_path)
+                return []
+
+            # Strip markdown code fences if present
+            if text.startswith("```"):
+                text = "\n".join(text.split("\n")[1:])
+                if text.endswith("```"):
+                    text = text[:-3].strip()
+
+            # Try to extract JSON object from response that may have surrounding prose
+            if not text.startswith("{") and not text.startswith("["):
+                json_match = re.search(r'\{[\s\S]*\}', text)
+                if json_match:
+                    text = json_match.group(0)
+                else:
+                    logger.warning(
+                        "Meta-analyzer: no JSON found in response for %s (first 200 chars: %s)",
+                        batch.file_path, text[:200]
+                    )
+                    return []
+
+            try:
+                data = json.loads(text)
+            except json.JSONDecodeError as exc:
+                logger.warning(
+                    "Meta-analyzer: invalid JSON for %s: %s (first 200 chars: %s)",
+                    batch.file_path, exc, text[:200]
+                )
+                return []
+
+            try:
+                if isinstance(data, dict):
+                    response = MetaAnalyzerResult.model_validate(data)
+                elif isinstance(data, list):
+                    response = MetaAnalyzerResult(
+                        findings=[MetaAnalyzerFinding.model_validate(f) for f in data]
+                    )
+                else:
+                    logger.warning(
+                        "Meta-analyzer: unexpected JSON type %s for %s",
+                        type(data).__name__, batch.file_path
+                    )
+                    return []
+            except Exception as exc:
+                logger.warning(
+                    "Meta-analyzer: validation error for %s: %s (first 200 chars: %s)",
+                    batch.file_path, exc, text[:200]
+                )
+                return []
+
+        content = getattr(response, "content", None)
+        if content and isinstance(content, str):
+            return self.parse_response(content, batch)
+
+        if not isinstance(response, MetaAnalyzerResult):
+            return []
+
         items: list[dict[str, object]] = []
         for f in response.findings:
             d = f.model_dump()
@@ -400,8 +495,12 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
             len(filtered),
         )
         return {"filtered_findings": filtered}
-    except ValueError:
-        raise
     except Exception as e:
-        logger.warning("LLM call failed, using fallback: %s", e)
+        if "ANTHROPIC_VERTEX_PROJECT_ID" in str(e):
+            raise
+        import traceback
+        logger.warning(
+            "Meta-analyzer LLM call failed (%s: %s), using fallback. Traceback:\n%s",
+            type(e).__name__, e, traceback.format_exc()
+        )
         return {"filtered_findings": _fallback_filtered(findings)}

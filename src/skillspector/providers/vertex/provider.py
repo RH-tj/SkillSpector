@@ -24,9 +24,9 @@ REGISTRY_PATH = str(Path(__file__).with_name("model_registry.yaml"))
 class VertexProvider:
     """Vertex AI credentials + bundled-YAML metadata provider."""
 
-    DEFAULT_MODEL = "claude-sonnet-4-6"
+    DEFAULT_MODEL = "claude-opus-4-6"
     SLOT_DEFAULTS: dict[str, str] = {
-        "meta_analyzer": "claude-sonnet-4-6",
+        "meta_analyzer": "claude-opus-4-6",
     }
 
     @property

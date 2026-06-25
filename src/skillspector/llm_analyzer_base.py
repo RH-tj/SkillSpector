@@ -208,7 +208,32 @@ Reference line numbers (shown as L-prefixes) when reporting findings.
   no genuine issues exist.  Do not manufacture findings to fill the response.
 - Precision over recall: only report issues you are confident about.  It is
   far better to miss an edge case than to report a false positive.
-- Be precise: report only genuine issues, not speculative ones."""
+- Be precise: report only genuine issues, not speculative ones.
+
+## RESPONSE FORMAT
+
+You MUST respond with ONLY a JSON object (no markdown fences, no prose before or after).
+The JSON must conform to this exact schema:
+
+```
+{{
+  "findings": [
+    {{
+      "rule_id": "<identifier for the type of finding>",
+      "message": "<short description>",
+      "severity": "<LOW|MEDIUM|HIGH|CRITICAL>",
+      "start_line": <integer line number>,
+      "end_line": <integer or null>,
+      "confidence": <float 0.0 to 1.0>,
+      "explanation": "<why this is a finding, 2-3 sentences>",
+      "remediation": "<actionable steps to fix>"
+    }}
+  ]
+}}
+```
+
+If no genuine issues exist, respond with: {{"findings": []}}
+Do NOT wrap the JSON in markdown code fences. Do NOT include any text outside the JSON."""
 
 
 # ---------------------------------------------------------------------------
@@ -241,9 +266,9 @@ class LLMAnalyzerBase:
         self.model = model
         self._input_budget = get_max_input_tokens(model)
         self._llm = get_chat_model(model=model)
-        self._structured_llm = (
-            self._llm.with_structured_output(self.response_schema) if self.response_schema else None
-        )
+        # Vertex AI does not reliably support with_structured_output —
+        # use raw invocation and parse JSON in parse_response instead.
+        self._structured_llm = None
 
     # -- Batching -----------------------------------------------------------
 
@@ -323,9 +348,55 @@ class LLMAnalyzerBase:
         The default converts each :class:`LLMFinding` to a :class:`Finding`
         via :meth:`LLMFinding.to_finding`.  Override in subclasses that use a
         different ``response_schema`` or raw-string mode.
+
+        Handles both parsed Pydantic objects (from providers that support
+        structured output natively) and raw JSON strings (e.g. Vertex AI).
         """
+        import json
+
         if isinstance(response, LLMAnalysisResult):
             return [f.to_finding(batch.file_path) for f in response.findings]
+
+        # Raw string mode (Vertex AI / raw invocation)
+        if isinstance(response, str):
+            import re
+
+            text = response.strip()
+            if not text or text.lower() in ("none", "no findings"):
+                return []
+            # Strip markdown code fences if present
+            if text.startswith("```"):
+                text = "\n".join(text.split("\n")[1:])
+                if text.endswith("```"):
+                    text = text[:-3].strip()
+            # Try to extract JSON from response that may have surrounding prose
+            if not text.startswith("{") and not text.startswith("["):
+                json_match = re.search(r'\{[\s\S]*\}', text)
+                if json_match:
+                    text = json_match.group(0)
+                else:
+                    logger.debug("No JSON found in LLM response for %s", batch.file_path)
+                    return []
+            try:
+                data = json.loads(text)
+                if isinstance(data, dict) and "findings" in data:
+                    parsed = LLMAnalysisResult.model_validate(data)
+                elif isinstance(data, list):
+                    parsed = LLMAnalysisResult(
+                        findings=[LLMFinding.model_validate(f) for f in data]
+                    )
+                else:
+                    parsed = LLMAnalysisResult(findings=[])
+                return [f.to_finding(batch.file_path) for f in parsed.findings]
+            except (json.JSONDecodeError, Exception) as exc:
+                logger.warning("Failed to parse LLM JSON response for %s: %s", batch.file_path, exc)
+                return []
+
+        # AIMessage or other wrapper — extract content and retry
+        content = getattr(response, "content", None)
+        if content and isinstance(content, str):
+            return self.parse_response(content, batch)
+
         raise NotImplementedError(
             "Override parse_response for custom response_schema or raw-string mode"
         )

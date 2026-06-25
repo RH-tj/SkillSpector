@@ -130,7 +130,7 @@ def test_scp_disallowed_host_raises() -> None:
 
 
 def test_scp_private_ip_raises() -> None:
-    """_validate_url_host rejects an scp URL with a link-local IP host."""
+    """_validate_url_host rejects an scp URL whose extracted host is not in the allowlist."""
     with pytest.raises(ValueError):
         InputHandler()._validate_url_host("git@169.254.169.254:org/repo.git", ALLOWED_GIT_HOSTS)
 

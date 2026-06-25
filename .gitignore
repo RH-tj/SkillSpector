@@ -97,6 +97,7 @@ venv.bak/
 tmp/
 temp/
 .skillspector/
+scan-results/
 
 # API Keys (never commit!)
 .env.local

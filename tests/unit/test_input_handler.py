@@ -139,3 +139,10 @@ def test_https_url_unchanged() -> None:
     """https URLs continue to extract the host via urlparse without hitting the scp fallback."""
     host = InputHandler()._validate_url_host("https://github.com/org/repo.git", ALLOWED_GIT_HOSTS)
     assert host == "github.com"
+
+
+def test_scp_ssrf_gate_fires() -> None:
+    """SSRF gate raises ValueError for an scp URL whose host resolves to a private IP."""
+    with patch("skillspector.input_handler._is_private_ip", return_value=True):
+        with pytest.raises(ValueError, match="private/internal IP"):
+            InputHandler()._validate_url_host("git@github.com:org/repo.git", ALLOWED_GIT_HOSTS)

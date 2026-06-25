@@ -1,9 +1,73 @@
-# SkillSpector
+# SkillSpector (Vertex AI Fork)
+
+> **Fork of [NVIDIA/SkillSpector](https://github.com/NVIDIA/skillspector)** — refactored to use **Google Vertex AI exclusively** for LLM analysis. All LLM traffic stays within your GCP project; no external API keys or endpoints are used.
 
 **Security scanner for AI agent skills.** Detect vulnerabilities, malicious patterns, and security risks before installing agent skills.
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
+
+## Fork Changes
+
+This fork replaces all three upstream LLM provider backends (OpenAI, Anthropic direct, NVIDIA `nv_build`) with a single **Google Vertex AI** provider.
+
+### Why
+
+Skill files often contain internal infrastructure details (URLs, credential paths, cluster names, RBAC configurations). Sending these to external LLM APIs may violate data residency or handling requirements. This fork ensures skill contents are only processed within your own GCP project boundary.
+
+### What Changed
+
+| Aspect | Upstream (NVIDIA) | This Fork |
+|--------|-------------------|-----------|
+| LLM providers | OpenAI, Anthropic, NVIDIA | **Vertex AI only** |
+| Authentication | API keys via env vars | **Google ADC** (no keys stored) |
+| Data path | External API endpoints | **Within GCP project** |
+| Default model | Provider-specific | **Claude Opus 4.6 on Vertex** |
+
+**Files changed:** Removed `providers/openai/`, `providers/anthropic/`, `providers/nv_build/`. Added `providers/vertex/` with `VertexProvider` class and model registry. Rewrote `llm_utils.py` to use `ChatAnthropicVertex` from `langchain-google-vertexai`.
+
+### Quick Start (Vertex)
+
+**Prerequisites:** Python 3.12+, a GCP project with the Claude model enabled on Vertex AI, and `gcloud` CLI installed.
+
+```bash
+# 1. Clone this fork
+git clone https://github.com/RH-tj/SkillSpector.git
+cd SkillSpector
+
+# 2. Create venv and install
+uv venv .venv && source .venv/bin/activate
+make install
+
+# 3. Authenticate with Google Cloud
+gcloud auth application-default login
+
+# 4. Set your GCP project ID
+export ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project-id
+
+# 5. Scan a skill directory
+skillspector scan ./path/to/skills/
+
+# Optional: override region (defaults to "global")
+export CLOUD_ML_REGION=us-east5
+
+# Optional: override model
+export SKILLSPECTOR_MODEL=claude-sonnet-4-6
+
+# Static-only scan (no LLM, no GCP needed)
+skillspector scan ./path/to/skills/ --no-llm
+```
+
+### Environment Variables (Vertex)
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `ANTHROPIC_VERTEX_PROJECT_ID` | GCP project hosting the Claude model on Vertex AI | **Yes** (for LLM analysis) |
+| `CLOUD_ML_REGION` | Vertex AI region (default: `global`) | No |
+| `SKILLSPECTOR_MODEL` | Override the default model (default: `claude-opus-4-6`) | No |
+| `SKILLSPECTOR_LOG_LEVEL` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `WARNING`) | No |
+
+---
 
 ## Overview
 
@@ -31,9 +95,9 @@ SkillSpector helps you answer: **"Is this skill safe to install?"**
 Create and activate a virtual environment first (all `make` targets assume the venv is active). Use **uv** or **pip**; the Makefile uses `uv` if available, otherwise `pip`.
 
 ```bash
-# Clone the repository
-git clone https://github.com/NVIDIA/skillspector.git
-cd skillspector
+# Clone this fork
+git clone https://github.com/RH-tj/SkillSpector.git
+cd SkillSpector
 
 # Create and activate virtual environment
 uv venv .venv && source .venv/bin/activate
@@ -80,46 +144,23 @@ skillspector scan ./my-skill/ --format sarif --output report.sarif
 
 ### LLM Analysis
 
-For the best results, configure an OpenAI-compatible LLM endpoint for
-semantic analysis. Pick a provider with `SKILLSPECTOR_PROVIDER`; each
-ships its own bundled default model. SkillSpector also works against
-local OpenAI-compatible servers (Ollama, vLLM, llama.cpp) and managed
-inference gateways.
-
-| Provider (`SKILLSPECTOR_PROVIDER`) | Credential env var | Endpoint | Default model |
-|----------|----|----|----|
-| `openai` | `OPENAI_API_KEY` (+ optional `OPENAI_BASE_URL`) | api.openai.com (or any OpenAI-compatible URL) | `gpt-5.4` |
-| `anthropic` | `ANTHROPIC_API_KEY` | api.anthropic.com | `claude-opus-4-6` |
-| `nv_build` | `NVIDIA_INFERENCE_KEY` | build.nvidia.com | `deepseek-ai/deepseek-v4-flash` |
+This fork uses **Google Vertex AI** exclusively for LLM semantic analysis.
+Authenticate via Google Application Default Credentials (ADC) and set your
+GCP project ID. No API keys are stored or transmitted.
 
 ```bash
-# Stock OpenAI
-export SKILLSPECTOR_PROVIDER=openai
-export OPENAI_API_KEY=sk-...
+# Authenticate and configure
+gcloud auth application-default login
+export ANTHROPIC_VERTEX_PROJECT_ID=your-gcp-project-id
+
+# Run a scan with LLM analysis
 skillspector scan ./my-skill/
 
-# Anthropic
-export SKILLSPECTOR_PROVIDER=anthropic
-export ANTHROPIC_API_KEY=sk-ant-...
+# Override the default model (claude-opus-4-6)
+export SKILLSPECTOR_MODEL=claude-sonnet-4-6
 skillspector scan ./my-skill/
 
-# NVIDIA build.nvidia.com
-export SKILLSPECTOR_PROVIDER=nv_build
-export NVIDIA_INFERENCE_KEY=nvapi-...
-skillspector scan ./my-skill/
-
-# Local Ollama or any OpenAI-compatible endpoint
-export SKILLSPECTOR_PROVIDER=openai
-export OPENAI_API_KEY=ollama
-export OPENAI_BASE_URL=http://localhost:11434/v1
-export SKILLSPECTOR_MODEL=llama3.1:8b
-skillspector scan ./my-skill/
-
-# Override the provider's default model
-export SKILLSPECTOR_MODEL=gpt-5.2
-skillspector scan ./my-skill/
-
-# Skip LLM analysis (faster, static analysis only)
+# Skip LLM analysis (faster, static analysis only, no GCP needed)
 skillspector scan ./my-skill/ --no-llm
 ```
 
@@ -338,14 +379,11 @@ Issues (2)
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `SKILLSPECTOR_PROVIDER` | Active LLM provider: `openai`, `anthropic`, or `nv_build`. Each provider has its own bundled `model_registry.yaml` and default model (see the LLM Analysis table above). Defaults to `nv_build`. | Optional |
-| `NVIDIA_INFERENCE_KEY` | Credential for the `nv_build` provider (build.nvidia.com). | Required for LLM analysis when `SKILLSPECTOR_PROVIDER=nv_build` |
-| `OPENAI_API_KEY` | Credential for the OpenAI provider (`SKILLSPECTOR_PROVIDER=openai`). Also serves as the tier-2 fallback in the credential waterfall when the active provider returns no credentials. | Required for LLM analysis when `SKILLSPECTOR_PROVIDER=openai` |
-| `OPENAI_BASE_URL` | Override the OpenAI endpoint (e.g. point at Ollama). | Optional |
-| `ANTHROPIC_API_KEY` | Credential for the Anthropic provider (`SKILLSPECTOR_PROVIDER=anthropic`). | Required for LLM analysis when `SKILLSPECTOR_PROVIDER=anthropic` |
-| `SKILLSPECTOR_MODEL` | Override the active provider's default model. See the LLM Analysis table for each provider's default. | Optional |
-| `SKILLSPECTOR_MODEL_REGISTRY` | Override the bundled per-provider YAML registry (`src/skillspector/providers/<provider>.yaml`) with a custom path. | Optional |
-| `SKILLSPECTOR_LOG_LEVEL` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `WARNING`). | Optional |
+| `ANTHROPIC_VERTEX_PROJECT_ID` | GCP project hosting the Claude model on Vertex AI. | **Yes** (for LLM analysis) |
+| `CLOUD_ML_REGION` | Vertex AI region (default: `global`). | No |
+| `SKILLSPECTOR_MODEL` | Override the default model (default: `claude-opus-4-6`). Available: `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-opus-4-5`. | No |
+| `SKILLSPECTOR_MODEL_REGISTRY` | Override the bundled YAML registry (`src/skillspector/providers/vertex/model_registry.yaml`) with a custom path. | No |
+| `SKILLSPECTOR_LOG_LEVEL` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `WARNING`). | No |
 
 ### CLI Options
 
@@ -368,8 +406,8 @@ All `make` targets assume a virtual environment is already created and activated
 
 ```bash
 # Clone, create venv, activate, install dev dependencies
-git clone https://github.com/NVIDIA/skillspector.git
-cd skillspector
+git clone https://github.com/RH-tj/SkillSpector.git
+cd SkillSpector
 uv venv .venv && source .venv/bin/activate
 # or: python3 -m venv .venv && source .venv/bin/activate
 make install-dev
@@ -466,4 +504,5 @@ Contributions are welcome! Please read our contributing guidelines and submit pu
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/NVIDIA/skillspector/issues)
+- **Fork issues**: [GitHub Issues](https://github.com/RH-tj/SkillSpector/issues)
+- **Upstream issues**: [NVIDIA/SkillSpector Issues](https://github.com/NVIDIA/skillspector/issues)

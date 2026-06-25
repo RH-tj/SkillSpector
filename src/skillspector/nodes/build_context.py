@@ -28,6 +28,7 @@ import yaml
 
 from skillspector.constants import MODEL_CONFIG
 from skillspector.logging_config import get_logger
+from skillspector.rate_limiter import configure as configure_rate_limiter
 from skillspector.state import SkillspectorState
 
 logger = get_logger(__name__)
@@ -240,6 +241,7 @@ def build_context(state: SkillspectorState) -> dict[str, object]:
         return _minimal_update()
 
     components = _walk_skill_files(skill_dir)
+    configure_rate_limiter(len(components))
     file_cache = _read_file_cache(skill_dir, components)
     manifest = _parse_manifest(skill_dir)
     component_metadata, has_executable_scripts = _build_component_metadata(skill_dir, components)

@@ -67,6 +67,23 @@ skillspector scan ./path/to/skills/ --no-llm
 | `SKILLSPECTOR_MODEL` | Override the default model (default: `claude-opus-4-6`) | No |
 | `SKILLSPECTOR_LOG_LEVEL` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `WARNING`) | No |
 
+### Adaptive Rate Limiter
+
+Large repos (hundreds of skill files) can overwhelm Vertex AI's per-model quota when the LLM semantic analyzers fire hundreds of concurrent requests. This fork adds an **adaptive rate limiter** that automatically adjusts concurrency based on scan size.
+
+| Scan Size | Mode | Behavior |
+|-----------|------|----------|
+| **<= 50 files** | Aggressive | 10 concurrent requests per analyzer — matches upstream speed for single-skill repos |
+| **> 50 files** | Throttled | 5 concurrent requests globally across all analyzers, with exponential backoff + jitter on 429 errors |
+
+The limiter uses a process-wide `threading.Semaphore` shared across all LLM-calling analyzer nodes (SSD, SDI, SQP, and meta-analyzer), regardless of how LangGraph schedules them across threads and event loops. In throttled mode, a second-chance retry layer (exponential backoff from 4s to 120s, up to 6 retries with random jitter) sits on top of LangChain's built-in retry to gracefully handle sustained rate limiting.
+
+The mode is determined automatically — no configuration needed. The scan log reports which mode was selected:
+
+```
+INFO [skillspector.rate_limiter] Rate limiter: throttled mode (731 files > 50 threshold, concurrency=5)
+```
+
 ---
 
 ## Overview
@@ -384,6 +401,8 @@ Issues (2)
 | `SKILLSPECTOR_MODEL` | Override the default model (default: `claude-opus-4-6`). Available: `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-opus-4-5`. | No |
 | `SKILLSPECTOR_MODEL_REGISTRY` | Override the bundled YAML registry (`src/skillspector/providers/vertex/model_registry.yaml`) with a custom path. | No |
 | `SKILLSPECTOR_LOG_LEVEL` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `WARNING`). | No |
+
+**Note:** LLM concurrency is managed automatically by the [adaptive rate limiter](#adaptive-rate-limiter) based on file count (aggressive for <= 50 files, throttled for larger repos).
 
 ### CLI Options
 

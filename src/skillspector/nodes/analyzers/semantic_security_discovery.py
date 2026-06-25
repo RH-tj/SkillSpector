@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from pydantic import ValidationError
 
 from skillspector.constants import _SKILLSPECTOR_DEFAULT_MODEL
@@ -87,7 +89,7 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
     try:
         analyzer = LLMAnalyzerBase(base_prompt=ANALYZER_PROMPT, model=model)
         batches = analyzer.get_batches(components, file_cache)
-        results = analyzer.run_batches(batches)
+        results = asyncio.run(analyzer.arun_batches(batches))
         findings = analyzer.collect_findings(results)
         logger.info("%s: %d findings", ANALYZER_ID, len(findings))
         return {"findings": findings}

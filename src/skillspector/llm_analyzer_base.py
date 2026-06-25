@@ -38,6 +38,7 @@ from skillspector.llm_utils import get_chat_model
 from skillspector.logging_config import get_logger
 from skillspector.model_info import get_max_input_tokens
 from skillspector.models import Finding
+from skillspector.rate_limiter import rate_limited_ainvoke, rate_limited_invoke
 
 logger = get_logger(__name__)
 
@@ -423,10 +424,10 @@ class LLMAnalyzerBase:
                 estimate_tokens(prompt),
                 len(batch.findings),
             )
-            if self._structured_llm:
-                response = self._structured_llm.invoke(prompt)
-            else:
-                response = self._llm.invoke(prompt).content
+            llm = self._structured_llm or self._llm
+            response = rate_limited_invoke(llm, prompt)
+            if not self._structured_llm:
+                response = response.content
             logger.debug("LLM response for %s", batch.file_label)
             parsed = self.parse_response(response, batch)
             results.append((batch, parsed))
@@ -435,35 +436,34 @@ class LLMAnalyzerBase:
     async def arun_batches(
         self,
         batches: list[Batch],
-        *,
-        max_concurrency: int = 10,
         **kwargs: object,
     ) -> list[tuple[Batch, list]]:
         """Execute LLM calls for all *batches* concurrently.
 
-        Uses ``asyncio.gather`` with a semaphore to run up to
-        *max_concurrency* LLM requests in parallel.  Both cross-file and
-        cross-chunk batches are parallelized in a single gather call.
+        Concurrency is governed by the global rate limiter so that all
+        analyzer nodes share a single throttle against Vertex AI.
+
+        Creates a fresh LLM client for each invocation so that async
+        internals (httpx connection pools, asyncio semaphores) are bound
+        to the current event loop — prevents "bound to a different event
+        loop" errors when LangGraph runs nodes in separate threads.
 
         The return type mirrors :meth:`run_batches`.
         """
-        sem = asyncio.Semaphore(max_concurrency)
+        llm = get_chat_model(model=self.model)
 
         async def _process(batch: Batch) -> tuple[Batch, list]:
-            async with sem:
-                prompt = self.build_prompt(batch, **kwargs)
-                logger.debug(
-                    "LLM call for %s (tokens~%d, findings=%d)",
-                    batch.file_label,
-                    estimate_tokens(prompt),
-                    len(batch.findings),
-                )
-                if self._structured_llm:
-                    response = await self._structured_llm.ainvoke(prompt)
-                else:
-                    response = (await self._llm.ainvoke(prompt)).content
-                logger.debug("LLM response for %s", batch.file_label)
-                return (batch, self.parse_response(response, batch))
+            prompt = self.build_prompt(batch, **kwargs)
+            logger.debug(
+                "LLM call for %s (tokens~%d, findings=%d)",
+                batch.file_label,
+                estimate_tokens(prompt),
+                len(batch.findings),
+            )
+            response = await rate_limited_ainvoke(llm, prompt)
+            response = response.content
+            logger.debug("LLM response for %s", batch.file_label)
+            return (batch, self.parse_response(response, batch))
 
         return list(await asyncio.gather(*[_process(b) for b in batches]))
 

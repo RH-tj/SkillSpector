@@ -39,7 +39,7 @@ from skillspector.nodes.analyzers.pattern_defaults import (
     get_explanation,
     get_remediation,
 )
-from skillspector.state import MetaAnalyzerResponse, SkillspectorState
+from skillspector.state import MetaAnalyzerResponse, SkillspectorState, llm_call_record
 
 logger = get_logger(__name__)
 
@@ -63,7 +63,17 @@ class MetaAnalyzerFinding(BaseModel):
         description="The end line number from the finding's Location, if available.",
     )
     is_vulnerability: bool = Field(description="Whether this is a true vulnerability")
-    confidence: float = Field(ge=0.0, le=1.0, description="Confidence score between 0.0 and 1.0")
+    confidence: float = Field(description="Confidence score between 0.0 and 1.0")
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _normalize_confidence(cls, v: object) -> float:
+        """Accept 0-100 scale and normalize to [0, 1], then clamp."""
+        v = float(v)
+        if v > 1.0:
+            v = v / 100.0
+        return max(0.0, min(1.0, v))
+
     intent: Literal["malicious", "negligent", "benign"] = Field(
         description="Likely intent behind the finding"
     )
@@ -361,6 +371,8 @@ class LLMMetaAnalyzer(LLMAnalyzerBase):
 
     # -- Apply filter (keyed by file + rule_id + start/end_line) -------------
 
+    _HIGH_SEVERITY_FLOOR = frozenset({"CRITICAL", "HIGH"})
+
     def apply_filter(
         self,
         findings: list[Finding],
@@ -377,6 +389,7 @@ class LLMMetaAnalyzer(LLMAnalyzerBase):
         """
         _enrichment = tuple[str, str, float]
         confirmed_granular: dict[tuple[str, str, int, int | None], _enrichment] = {}
+        confirmed_by_start: dict[tuple[str, str, int], _enrichment] = {}
         confirmed_coarse: dict[tuple[str, str], _enrichment] = {}
 
         for batch, llm_items in batch_results:
@@ -403,6 +416,7 @@ class LLMMetaAnalyzer(LLMAnalyzerBase):
                             int(end_line) if end_line is not None else None,
                         )
                     ] = enrichment
+                    confirmed_by_start[(file_path, pattern_id, int(start_line))] = enrichment
                 else:
                     confirmed_coarse[(file_path, pattern_id)] = enrichment
 
@@ -411,13 +425,41 @@ class LLMMetaAnalyzer(LLMAnalyzerBase):
             exact_key = (f.file, f.rule_id, f.start_line, f.end_line)
             start_only_key = (f.file, f.rule_id, f.start_line, None)
             coarse_key = (f.file, f.rule_id)
+            start_key = (f.file, f.rule_id, f.start_line) if f.start_line is not None else None
             if exact_key in confirmed_granular:
                 expl, rem, conf = confirmed_granular[exact_key]
             elif start_only_key in confirmed_granular:
                 expl, rem, conf = confirmed_granular[start_only_key]
+            elif f.end_line is None and start_key is not None and start_key in confirmed_by_start:
+                expl, rem, conf = confirmed_by_start[start_key]
             elif coarse_key in confirmed_coarse:
                 expl, rem, conf = confirmed_coarse[coarse_key]
             else:
+                if f.severity in self._HIGH_SEVERITY_FLOOR:
+                    unconfirmed_tags = list(f.tags)
+                    if "llm-unconfirmed" not in unconfirmed_tags:
+                        unconfirmed_tags.append("llm-unconfirmed")
+                    result.append(
+                        Finding(
+                            rule_id=f.rule_id,
+                            message=f.message,
+                            severity=f.severity,
+                            confidence=f.confidence,
+                            file=f.file,
+                            start_line=f.start_line,
+                            end_line=f.end_line,
+                            remediation=f.remediation or get_remediation(f.rule_id),
+                            tags=unconfirmed_tags,
+                            context=f.context,
+                            matched_text=f.matched_text,
+                            category=getattr(f, "category", None),
+                            pattern=getattr(f, "pattern", None),
+                            finding=getattr(f, "finding", None),
+                            explanation=getattr(f, "explanation", None),
+                            code_snippet=getattr(f, "code_snippet", None) or f.context,
+                            intent=None,
+                        )
+                    )
                 continue
             result.append(
                 Finding(
@@ -487,14 +529,37 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
         )
 
         batch_results = asyncio.run(analyzer.arun_batches(batches, metadata_text=metadata_text))
-        filtered = analyzer.apply_filter(findings, batch_results)
+
+        if len(batch_results) < len(batches):
+            analysed_ids = {id(f) for batch, _ in batch_results for f in batch.findings}
+            analysed = [f for f in findings if id(f) in analysed_ids]
+            unanalysed = [f for f in findings if id(f) not in analysed_ids]
+        else:
+            analysed, unanalysed = findings, []
+
+        filtered = analyzer.apply_filter(analysed, batch_results)
+        if unanalysed:
+            logger.warning(
+                "Meta-analyzer: %d/%d batches failed; keeping %d findings in %d "
+                "files unfiltered (no LLM verdict)",
+                len(batches) - len(batch_results),
+                len(batches),
+                len(unanalysed),
+                len({f.file for f in unanalysed}),
+            )
+            filtered.extend(_fallback_filtered(unanalysed))
 
         logger.debug(
             "LLM filtering done: %d findings -> %d after filter",
             len(findings),
             len(filtered),
         )
-        return {"filtered_findings": filtered}
+        return {
+            "filtered_findings": filtered,
+            "llm_call_log": [llm_call_record("meta_analyzer", ok=True)],
+        }
+    except ValueError:
+        raise
     except Exception as e:
         if "ANTHROPIC_VERTEX_PROJECT_ID" in str(e):
             raise
@@ -503,4 +568,7 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
             "Meta-analyzer LLM call failed (%s: %s), using fallback. Traceback:\n%s",
             type(e).__name__, e, traceback.format_exc()
         )
-        return {"filtered_findings": _fallback_filtered(findings)}
+        return {
+            "filtered_findings": _fallback_filtered(findings),
+            "llm_call_log": [llm_call_record("meta_analyzer", ok=False, error=str(e))],
+        }

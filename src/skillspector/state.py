@@ -73,6 +73,9 @@ class SkillspectorState(TypedDict, total=False):
     # Additional YARA rules directory (user-specified via --yara-rules-dir)
     yara_rules_dir: str | None
 
+    # LLM call telemetry — each LLM-backed node appends one record per run.
+    llm_call_log: Annotated[list[dict[str, object]], operator.add]
+
 
 class AnalyzerNodeResponse(TypedDict):
     """Strict analyzer update payload for graph state."""
@@ -80,7 +83,18 @@ class AnalyzerNodeResponse(TypedDict):
     findings: list[Finding]
 
 
-class MetaAnalyzerResponse(TypedDict):
+class MetaAnalyzerResponse(TypedDict, total=False):
     """Strict meta-analyzer update payload for graph state."""
 
     filtered_findings: list[Finding]
+    llm_call_log: list[dict[str, object]]
+
+
+def llm_call_record(
+    node: str, *, ok: bool, error: str | None = None
+) -> dict[str, object]:
+    """Build a telemetry record for the llm_call_log reducer."""
+    rec: dict[str, object] = {"node": node, "ok": ok}
+    if error is not None:
+        rec["error"] = error
+    return rec

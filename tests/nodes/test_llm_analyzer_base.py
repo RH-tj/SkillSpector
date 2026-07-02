@@ -623,14 +623,24 @@ class TestMetaAnalyzerResult:
         assert result.findings[0].confidence == 0.9
 
     def test_confidence_validation(self) -> None:
-        with pytest.raises(ValueError):
-            MetaAnalyzerFinding(
-                pattern_id="E1",
-                is_vulnerability=True,
-                confidence=1.5,
-                intent="malicious",
-                impact="high",
-            )
+        """Out-of-range confidence is normalized (0-100 scale) then clamped."""
+        f = MetaAnalyzerFinding(
+            pattern_id="E1",
+            is_vulnerability=True,
+            confidence=1.5,
+            intent="malicious",
+            impact="high",
+        )
+        assert f.confidence == 0.015  # 1.5 / 100, clamped to [0, 1]
+
+        f2 = MetaAnalyzerFinding(
+            pattern_id="E1",
+            is_vulnerability=True,
+            confidence=85,
+            intent="malicious",
+            impact="high",
+        )
+        assert f2.confidence == 0.85  # 85 / 100
 
     def test_intent_validation(self) -> None:
         with pytest.raises(ValueError):

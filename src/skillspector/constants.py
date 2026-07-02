@@ -27,11 +27,10 @@ MAX_INPUT_TOKENS_PCT = 0.75
 # Fallback context length when no metadata API or registry entry is available.
 DEFAULT_CONTEXT_LENGTH = 128_000
 
-# Default-model selection lives on each provider (see providers/<name>/provider.py
-# for ``DEFAULT_MODEL`` and ``SLOT_DEFAULTS``).  The active provider's
-# ``resolve_model`` runs the waterfall: ``SKILLSPECTOR_MODEL`` env > slot
-# default > general default.  OSS users pointing at build.nvidia.com or
-# stock OpenAI inherit ``NvBuildProvider``'s default model automatically.
+# Default-model selection lives on the Vertex provider (see
+# providers/vertex/provider.py for ``DEFAULT_MODEL`` and ``SLOT_DEFAULTS``).
+# The provider's ``resolve_model`` runs the waterfall: ``SKILLSPECTOR_MODEL``
+# env > slot default > general default.
 _provider = get_metadata_provider()
 
 # Exposed for analyzers that need a final fallback symbol (e.g.,

@@ -42,7 +42,7 @@ from skillspector.rate_limiter import rate_limited_ainvoke, rate_limited_invoke
 
 logger = get_logger(__name__)
 
-# OpenAI suggests ~4 chars per token for English text with BPE tokenizers.
+# ~4 chars per token for English text with BPE tokenizers (Claude, GPT-family).
 CHARS_PER_TOKEN = 4
 CHUNK_OVERLAP_LINES = 50
 

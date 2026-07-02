@@ -99,11 +99,14 @@ SkillSpector helps you answer: **"Is this skill safe to install?"**
 ## Features
 
 - **Multi-format input**: Scan Git repos, URLs, zip files, directories, or single files
-- **64 vulnerability patterns** across 16 categories: prompt injection, data exfiltration, privilege escalation, supply chain, excessive agency, output handling, system prompt leakage, memory poisoning, tool misuse, rogue agent, trigger abuse, dangerous code (AST), taint tracking, YARA signatures, MCP least privilege, and MCP tool poisoning
+- **80+ vulnerability patterns** across 20 categories: prompt injection, data exfiltration, privilege escalation, supply chain, excessive agency, output handling, system prompt leakage, memory poisoning, tool misuse, rogue agent, trigger abuse, dangerous code (AST), taint tracking, YARA signatures, MCP least privilege, MCP tool poisoning, agent snooping, SSRF, anti-refusal jailbreaks, and MCP rug-pull
 - **Two-stage analysis**: Fast static analysis + optional LLM semantic evaluation
+- **Severity-gated floor**: CRITICAL/HIGH findings survive LLM filtering to prevent prompt-injection-induced false negatives
+- **Batch failure isolation**: A single LLM API failure only affects its own file batch, not the entire scan
 - **Live vulnerability lookups**: SC4 queries [OSV.dev](https://osv.dev) for real-time CVE data with automatic offline fallback
 - **Multiple output formats**: Terminal, JSON, Markdown, and SARIF reports
-- **Risk scoring**: 0-100 score with severity labels and clear recommendations
+- **Risk scoring**: 0-100 score with severity labels, per-file executable weighting, and diminishing returns per rule
+- **Analysis completeness tracking**: JSON reports include `analysis_completeness` with coverage percentage and LLM analysis status
 
 ## Quick Start
 
@@ -183,7 +186,7 @@ skillspector scan ./my-skill/ --no-llm
 
 ## Vulnerability Patterns
 
-SkillSpector detects **64 vulnerability patterns** across 16 categories:
+SkillSpector detects **80+ vulnerability patterns** across 20 categories:
 
 ### Prompt Injection (5 patterns)
 
@@ -195,7 +198,7 @@ SkillSpector detects **64 vulnerability patterns** across 16 categories:
 | P4 | Behavior Manipulation | MEDIUM | Subtle instructions altering agent decisions |
 | P5 | Harmful Content | CRITICAL | Instructions that could cause physical harm |
 
-### Data Exfiltration (4 patterns)
+### Data Exfiltration (5 patterns)
 
 | ID | Pattern | Severity | Description |
 |----|---------|----------|-------------|
@@ -203,14 +206,17 @@ SkillSpector detects **64 vulnerability patterns** across 16 categories:
 | E2 | Env Variable Harvesting | HIGH | Collecting API keys and secrets |
 | E3 | File System Enumeration | MEDIUM | Scanning directories for sensitive files |
 | E4 | Context Leakage | HIGH | Transmitting conversation context externally |
+| E5 | Cloud Storage Exfiltration | HIGH | Uploading data to S3, GCS, or Azure Blob storage |
 
-### Privilege Escalation (3 patterns)
+### Privilege Escalation (5 patterns)
 
 | ID | Pattern | Severity | Description |
 |----|---------|----------|-------------|
 | PE1 | Excessive Permissions | LOW | Requesting access beyond stated functionality |
 | PE2 | Sudo/Root Execution | MEDIUM | Invoking elevated system privileges |
 | PE3 | Credential Access | HIGH | Reading SSH keys, tokens, passwords |
+| PE4 | Docker Socket Access | HIGH | Accessing the Docker daemon socket for container control |
+| PE5 | Privileged Container / Container Escape | HIGH | Running containers with --privileged, host mounts, nsenter, or cgroup escape techniques |
 
 ### Supply Chain (6 patterns)
 
@@ -256,13 +262,14 @@ SkillSpector detects **64 vulnerability patterns** across 16 categories:
 | MP2 | Context Window Stuffing | MEDIUM | Filler content displacing safety constraints |
 | MP3 | Memory Manipulation | HIGH | Tampering with agent memory or stored state |
 
-### Tool Misuse (3 patterns)
+### Tool Misuse (4 patterns)
 
 | ID | Pattern | Severity | Description |
 |----|---------|----------|-------------|
 | TM1 | Tool Parameter Abuse | HIGH | Crafted parameters for unintended behavior (shell=True, --force) |
 | TM2 | Chaining Abuse | HIGH | Tool chains that bypass individual safety checks |
 | TM3 | Unsafe Defaults | MEDIUM | Overly permissive defaults (disabled TLS, no auth) |
+| TM4 | Privileged Kubernetes Workload | HIGH | Deploying privileged containers, hostPath mounts, or hostPID/hostNetwork pods |
 
 ### Rogue Agent (2 patterns)
 
@@ -279,7 +286,7 @@ SkillSpector detects **64 vulnerability patterns** across 16 categories:
 | TR2 | Shadow Command Trigger | HIGH | Triggers that shadow built-in commands or other skills |
 | TR3 | Keyword Baiting Trigger | MEDIUM | Generic triggers designed to maximize activation |
 
-### Behavioral AST (8 patterns)
+### Behavioral AST (9 patterns)
 
 | ID | Pattern | Severity | Description |
 |----|---------|----------|-------------|
@@ -291,6 +298,7 @@ SkillSpector detects **64 vulnerability patterns** across 16 categories:
 | AST6 | compile() Call | MEDIUM | Code object creation from strings |
 | AST7 | Dynamic getattr() | MEDIUM | Arbitrary attribute access with non-literal names |
 | AST8 | Dangerous Execution Chain | CRITICAL | exec/eval combined with dynamic source (network, encoded data) |
+| AST9 | Reflective getattr to Exec Sink | HIGH | getattr() with a constant name resolving to an execution sink (e.g. `getattr(os, "system")`) |
 
 ### Taint Tracking (5 patterns)
 
@@ -300,7 +308,7 @@ SkillSpector detects **64 vulnerability patterns** across 16 categories:
 | TT2 | Variable-Mediated Taint Flow | MEDIUM | Data flows from source to sink through intermediate variables |
 | TT3 | Credential Exfiltration Chain | CRITICAL | Credentials (env vars, secrets) flow to network output sinks |
 | TT4 | File Read to Network Exfiltration | HIGH | File contents flow to network output sinks |
-| TT5 | External Input to Code Execution | CRITICAL | Network or user input flows to exec/eval/subprocess sinks |
+| TT5 | External Input to Execution Flow | CRITICAL | External input (network, user) flows to code execution sinks |
 
 ### YARA Signatures (4 patterns)
 
@@ -328,6 +336,38 @@ SkillSpector detects **64 vulnerability patterns** across 16 categories:
 | TP2 | Unicode Deception | HIGH | Homoglyphs, RTL overrides, mixed-script identifiers in tool metadata |
 | TP3 | Parameter Description Injection | MEDIUM | Injection patterns in parameter definitions (overrides, system tokens, malicious defaults) |
 | TP4 | Description-Behavior Mismatch | MEDIUM | Declared tool description does not match actual code behavior (LLM-powered) |
+
+### Agent Snooping (3 patterns)
+
+| ID | Pattern | Severity | Description |
+|----|---------|----------|-------------|
+| AS1 | Agent Config Directory Access | HIGH | Reading agent configuration directories (.claude/, .codex/, .gemini/) |
+| AS2 | MCP Config Access | HIGH | Accessing MCP server configuration files (mcp.json) containing server addresses and credentials |
+| AS3 | Skill Enumeration | MEDIUM | Enumerating or reading other installed skills to discover capabilities or exfiltrate instructions |
+
+### Server-Side Request Forgery (3 patterns)
+
+| ID | Pattern | Severity | Description |
+|----|---------|----------|-------------|
+| SSRF1 | Cloud Metadata Access | HIGH | Accessing cloud instance metadata endpoints (169.254.169.254) to steal IAM credentials |
+| SSRF2 | Internal Network Request | MEDIUM | Requests to loopback, link-local, or private-range hosts that may reach internal services |
+| SSRF3 | Dynamic Request Target | HIGH | Request target host built from dynamic or untrusted values enabling arbitrary SSRF |
+
+### Anti-Refusal (3 patterns)
+
+| ID | Pattern | Severity | Description |
+|----|---------|----------|-------------|
+| AR1 | Refusal Suppression | MEDIUM | Instructions to never refuse or to always comply, suppressing the agent's safety refusals |
+| AR2 | Disclaimer Suppression | MEDIUM | Instructions to omit warnings, disclaimers, or ethical commentary |
+| AR3 | Safety Policy Nullification | HIGH | Attempts to nullify the agent's safety policies or content restrictions |
+
+### MCP Rug-Pull (3 patterns)
+
+| ID | Pattern | Severity | Description |
+|----|---------|----------|-------------|
+| RP1 | Unpinned MCP Server | MEDIUM | MCP servers or dependencies referenced without version pinning (npx, uvx, pip, docker) |
+| RP2 | Permission Pre-staging | LOW | Manifest language suggesting future permission expansion |
+| RP3 | Unpinned Skill Version | LOW | Skill version constraints that are absent or too broad, enabling silent updates |
 
 All detected patterns are listed in the tables above.
 
@@ -449,17 +489,24 @@ make format
 SkillSpector uses a two-stage detection pipeline:
 
 ### Stage 1: Static Analysis
-- Fast regex-based pattern matching across 11 static analyzers
-- AST-based behavioral analysis detecting dangerous calls (exec, eval, subprocess, etc.)
+- Fast regex-based pattern matching across 15+ static analyzers
+- AST-based behavioral analysis detecting dangerous calls (exec, eval, subprocess, getattr-to-exec, etc.)
+- Taint tracking for data-flow analysis (credential exfiltration chains, input-to-exec flows)
 - Live vulnerability lookups via OSV.dev for known CVEs in dependencies
-- Scans all files in the skill
+- YARA signature matching for known malware, webshells, cryptominers, and exploit code
+- MCP manifest analysis for least-privilege violations, tool poisoning, and rug-pull risks
+- Scans all files in the skill (binary and PDF files are automatically skipped)
 - High recall (catches most issues)
 - Moderate precision (some false positives)
 
 ### Stage 2: LLM Semantic Analysis (Optional)
-- Evaluates context and intent
-- Filters false positives
+- Evaluates context and intent using Vertex AI (Claude on GCP)
+- Filters false positives with confidence scoring
 - Provides human-readable explanations
+- **Severity-gated floor**: CRITICAL and HIGH findings survive LLM filtering — if the LLM does not confirm them, they are retained with an `llm-unconfirmed` tag rather than dropped. This prevents prompt injection in scanned skills from hiding real high-severity findings.
+- **Batch failure isolation**: LLM analysis is partitioned by file. If a single batch fails (e.g. due to a Vertex 429 rate limit), only that batch's findings fall back to static-only results — the rest of the scan retains full LLM enrichment.
+- **Confidence normalization**: LLM confidence values are automatically normalized (0-100 scale → 0.0-1.0) and clamped, preventing crashes from out-of-range model responses.
+- **LLM degradation tracking**: The report includes `llm_call_log` entries showing which LLM calls succeeded and which fell back, so you can tell exactly when LLM analysis was degraded.
 - Improves precision to ~87%
 
 The LLM prompt includes anti-jailbreak protections to prevent malicious skills from manipulating the analysis.
@@ -517,9 +564,82 @@ for finding in result["filtered_findings"]:
 
 Apache License 2.0 - see [LICENSE](LICENSE) for details.
 
-## Contributing
+## Development Guide — Syncing with Upstream
 
-Contributions are welcome! Please read our contributing guidelines and submit pull requests.
+This fork carries significant modifications to support **Vertex AI exclusively**, including an adaptive rate limiter, JSON response parsing, and hardened meta-analyzer logic. When pulling new changes from [NVIDIA/SkillSpector](https://github.com/NVIDIA/skillspector), certain files **must not be rebased or overwritten** because they contain the core of the fork's value.
+
+### Protected Files (Do Not Rebase/Overwrite)
+
+These files have been substantially rewritten or are unique to this fork. Upstream changes to these files must be **manually ported** — never blindly cherry-picked or rebased.
+
+| File | Why It's Protected |
+|------|--------------------|
+| `src/skillspector/providers/vertex/` | **Vertex AI provider** — the fork's exclusive LLM backend. Upstream has no equivalent. |
+| `src/skillspector/providers/__init__.py` | Rewired to load only the Vertex provider; upstream registers OpenAI/Anthropic/NVIDIA. |
+| `src/skillspector/providers/base.py` | Modified base class to support Vertex-specific auth and model registry. |
+| `src/skillspector/llm_utils.py` | Rewritten to use `ChatAnthropicVertex` from `langchain-google-vertexai`. Upstream uses multi-provider dispatch. |
+| `src/skillspector/llm_analyzer_base.py` | Modified to integrate with the adaptive rate limiter. |
+| `src/skillspector/rate_limiter.py` | **Fork-only file.** Process-wide adaptive semaphore with exponential backoff for Vertex AI quota management. |
+| `src/skillspector/nodes/meta_analyzer.py` | Heavily modified: JSON parsing for raw Vertex responses, severity-gated floor, batch failure isolation, end_line matching fix, LLM degradation surfacing, confidence normalization. Must be manually ported. |
+| `src/skillspector/state.py` | Extended with `llm_call_log` and `llm_call_record()` for LLM degradation tracking. |
+| `src/skillspector/cli.py` | Modified for Vertex-specific CLI options and defaults. |
+| `pyproject.toml` | Dependencies changed (`langchain-google-vertexai` replaces upstream provider packages). |
+| `uv.lock` | Reflects the fork's dependency tree; regenerated from `pyproject.toml`. |
+| `README.md` | Completely rewritten for the Vertex fork. |
+
+### Safe to Cherry-Pick From Upstream
+
+These file categories are generally safe to integrate directly:
+
+- **New analyzer modules** (`src/skillspector/nodes/analyzers/`) — new pattern detectors are additive and don't conflict with the fork's changes.
+- **Test files** (`tests/`) — new tests for new analyzers typically apply cleanly. Existing test files that import from `providers/` or `llm_utils` may need adaptation.
+- **YARA rules** (`src/skillspector/yara_rules/`) — signature updates are independent.
+- **Documentation** (`docs/`) — architecture and development docs.
+- **CI/Docker files** (`.github/`, `Dockerfile`) — infrastructure that doesn't touch the provider layer.
+- **Scoring and report modules** (`src/skillspector/nodes/report.py`, `src/skillspector/nodes/scoring.py`) — upstream improvements to scoring logic are usually compatible.
+
+### Recommended Workflow for Upstream Sync
+
+```bash
+# 1. Add upstream remote (one-time)
+git remote add upstream https://github.com/NVIDIA/skillspector.git
+
+# 2. Fetch latest upstream
+git fetch upstream
+
+# 3. Identify new commits since last sync
+git log --oneline upstream/main --not main
+
+# 4. Classify each commit's changed files
+#    - If NO overlap with protected files → cherry-pick directly
+#    - If ONLY README.md overlap → cherry-pick --no-commit, revert README, commit
+#    - If overlap with protected files → manually port the relevant changes
+
+# 5. Cherry-pick safe commits (chronological order)
+git cherry-pick <hash>
+
+# 6. For README-conflict commits
+git cherry-pick --no-commit <hash>
+git checkout HEAD -- README.md
+git commit -m "upstream: <original message> (README kept)"
+
+# 7. For protected-file conflicts, manually read the upstream diff and
+#    apply the relevant logic into the fork's version of the file.
+
+# 8. Run tests
+make test
+skillspector scan ./test-skill/ --no-llm  # smoke test
+```
+
+### Key Architectural Decisions
+
+1. **Single provider**: All multi-provider dispatch logic has been replaced with direct Vertex AI calls. Upstream commits that add new providers (OpenAI, Bedrock, Anthropic direct) should be **skipped entirely**.
+
+2. **Rate limiting at the process level**: The fork uses a process-wide `threading.Semaphore` shared across all LLM-calling nodes. Upstream has no equivalent — any upstream changes to concurrency or batching in `llm_analyzer_base.py` or `meta_analyzer.py` must be evaluated for compatibility with the semaphore.
+
+3. **JSON response parsing**: The fork's `meta_analyzer.py` includes extensive JSON extraction logic to handle raw Vertex AI responses that may not be cleanly structured. Upstream assumes well-formed responses from their provider layer.
+
+4. **Confidence normalization**: The fork normalizes LLM confidence values from 0-100 scale to 0.0-1.0 via a Pydantic field validator. This was ported from upstream but interacts with the fork's JSON parsing — any upstream changes to the `MetaAnalyzerFinding` model must be checked against this validator.
 
 ## Support
 

@@ -631,6 +631,27 @@ make test
 skillspector scan ./test-skill/ --no-llm  # smoke test
 ```
 
+### Prohibited Patterns
+
+When working in this fork, **never** introduce any of the following:
+
+- **Alternative LLM providers** — no OpenAI, Anthropic direct, NVIDIA `nv_build`, or Bedrock imports. The only LLM backend is `ChatAnthropicVertex` via `langchain-google-vertexai`.
+- **External API key env vars** — no `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `NV_API_KEY`. Authentication is Google ADC only.
+- **Direct LLM client construction** — all LLM-calling code must use `get_chat_model()` from `llm_utils.py` and `rate_limited_ainvoke` / `rate_limited_invoke` from `rate_limiter.py`.
+
+See [`AGENTS.md`](AGENTS.md) for the full prohibited imports list and required patterns for new LLM-calling code.
+
+### Known Test Exclusions
+
+These test files have pre-existing import failures (they reference upstream's multi-provider API which was removed in the fork) and are excluded from the test baseline:
+
+- `tests/unit/test_llm_utils.py`
+- `tests/unit/test_providers.py`
+
+Run tests with: `pytest --ignore=tests/unit/test_llm_utils.py --ignore=tests/unit/test_providers.py`
+
+After any upstream sync, verify the failure count matches the `main` branch baseline. New failures indicate a regression.
+
 ### Key Architectural Decisions
 
 1. **Single provider**: All multi-provider dispatch logic has been replaced with direct Vertex AI calls. Upstream commits that add new providers (OpenAI, Bedrock, Anthropic direct) should be **skipped entirely**.

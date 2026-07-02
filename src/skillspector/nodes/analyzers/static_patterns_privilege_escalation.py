@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Static patterns: privilege escalation (PE1–PE3). Node and analyze() in one module."""
+"""Static patterns: privilege escalation (PE1–PE4). Node and analyze() in one module."""
 
 from __future__ import annotations
 
@@ -93,10 +93,16 @@ PE3_PATTERNS = [
     (r"access\s+(?:the\s+)?(?:credentials?|secrets?|tokens?)", 0.7),
     (r"(?:extract|copy|get)\s+(?:api\s+)?keys?\s+from", 0.7),
 ]
+PE4_PATTERNS = [
+    (r"/var/run/docker\.sock", 0.9),
+    (r"docker\.from_env\(\)", 0.85),
+    (r"\bDockerClient\s*\(", 0.85),
+    (r"http\+unix://.*docker\.sock", 0.9),
+]
 
 
 def analyze(content: str, file_path: str, file_type: str) -> list[AnalyzerFinding]:
-    """Analyze content for privilege escalation patterns (PE1–PE3)."""
+    """Analyze content for privilege escalation patterns (PE1–PE4)."""
     findings: list[AnalyzerFinding] = []
 
     def loc(ln: int) -> Location:
@@ -148,6 +154,24 @@ def analyze(content: str, file_path: str, file_type: str) -> list[AnalyzerFindin
                 AnalyzerFinding(
                     rule_id="PE3",
                     message="Credential Access",
+                    severity=Severity.HIGH,
+                    location=loc(line_num),
+                    confidence=confidence,
+                    tags=tag,
+                    context=context,
+                    matched_text=match.group(0)[:200],
+                )
+            )
+    for pattern, confidence in PE4_PATTERNS:
+        for match in re.finditer(pattern, content, re.IGNORECASE | re.MULTILINE):
+            line_num = get_line_number(content, match.start())
+            context = get_context(content, match.start())
+            if _is_documentation_example(context, file_type):
+                continue
+            findings.append(
+                AnalyzerFinding(
+                    rule_id="PE4",
+                    message="Docker Socket Access",
                     severity=Severity.HIGH,
                     location=loc(line_num),
                     confidence=confidence,

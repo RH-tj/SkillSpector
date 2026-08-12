@@ -92,7 +92,7 @@ class Finding:
 
     def to_dict(self) -> dict[str, object]:
         """Return a JSON-serializable dict representation (full finding shape)."""
-        return {
+        d: dict[str, object] = {
             "finding_id": self.finding_id,
             "id": self.rule_id,
             "category": self.category,
@@ -110,6 +110,9 @@ class Finding:
             "code_snippet": self.code_snippet or self.context,
             "intent": self.intent,
         }
+        if self.tags:
+            d["tags"] = list(self.tags)
+        return d
 
     def __str__(self) -> str:
         return f"{self.rule_id}: {self.message} ({self.file}:{self.start_line})"

@@ -591,3 +591,173 @@ def test_report_doc_findings_no_multiplier() -> None:
     # Without the multiplier: 2 HIGH = 50, not 65
     assert result["risk_score"] == 50
     assert result["risk_severity"] == "MEDIUM"
+
+
+# --- SARIF properties tests ---
+
+
+class TestBuildSarifProperties:
+    """Tests for _build_sarif_properties to prevent dict/attribute mismatch regressions."""
+
+    def test_properties_with_empty_tags(self) -> None:
+        """Finding with default empty tags should not include tags in properties."""
+        from skillspector.nodes.report import _build_sarif_properties
+
+        finding = _finding("P1", "HIGH", confidence=0.9)
+        props = _build_sarif_properties(finding)
+        assert props is not None
+        assert "tags" not in props
+        assert props["findingId"] == finding.finding_id
+        assert props["severity"] == "HIGH"
+        assert props["confidence"] == 0.9
+
+    def test_properties_with_populated_tags(self) -> None:
+        """Finding with tags should include them in SARIF properties."""
+        from skillspector.nodes.report import _build_sarif_properties
+
+        finding = Finding(
+            rule_id="E2",
+            message="exfiltration",
+            severity="CRITICAL",
+            confidence=0.95,
+            file="SKILL.md",
+            start_line=10,
+            tags=["data-exfil", "network"],
+        )
+        props = _build_sarif_properties(finding)
+        assert props is not None
+        assert props["tags"] == ["data-exfil", "network"]
+        assert props["severity"] == "CRITICAL"
+
+    def test_properties_with_none_optional_fields(self) -> None:
+        """None-valued optional fields should be excluded from properties."""
+        from skillspector.nodes.report import _build_sarif_properties
+
+        finding = Finding(
+            rule_id="P1",
+            message="injection",
+            severity="MEDIUM",
+            confidence=0.7,
+            file="a.md",
+            start_line=1,
+        )
+        props = _build_sarif_properties(finding)
+        assert props is not None
+        assert "category" not in props
+        assert "pattern" not in props
+        assert "intent" not in props
+        assert "remediation" not in props
+
+    def test_properties_returns_none_when_all_values_none(self) -> None:
+        """If every property resolves to None, function returns None."""
+        from skillspector.nodes.report import _build_sarif_properties
+
+        finding = Finding(
+            rule_id="X1",
+            message="m",
+            severity="LOW",
+            confidence=0.5,
+            file="f.md",
+            start_line=1,
+        )
+        props = _build_sarif_properties(finding)
+        # Even with minimal fields, findingId/severity/confidence are always set
+        assert props is not None
+        assert "findingId" in props
+
+
+class TestSarifReportWithTags:
+    """End-to-end SARIF generation with tagged findings."""
+
+    def test_sarif_output_includes_finding_tags(self) -> None:
+        """SARIF report with tagged findings includes tags in result properties."""
+        import json
+
+        tagged_finding = Finding(
+            rule_id="SC3",
+            message="obfuscated code detected",
+            severity="HIGH",
+            confidence=0.85,
+            file="install.py",
+            start_line=42,
+            tags=["supply-chain", "obfuscation"],
+            category="supply_chain",
+        )
+        state: SkillspectorState = {
+            "filtered_findings": [tagged_finding],
+            "component_metadata": [],
+            "has_executable_scripts": False,
+            "manifest": {},
+            "skill_path": None,
+            "output_format": "sarif",
+        }
+        result = report(state)
+        sarif = json.loads(result["report_body"])
+        results = sarif["runs"][0]["results"]
+        assert len(results) == 1
+        props = results[0].get("properties", {})
+        assert props["tags"] == ["supply-chain", "obfuscation"]
+        assert props["severity"] == "HIGH"
+        assert props["category"] == "supply_chain"
+
+    def test_sarif_output_no_tags_field_when_empty(self) -> None:
+        """SARIF result properties should not have a 'tags' key when tags is empty."""
+        import json
+
+        state: SkillspectorState = {
+            "filtered_findings": [_finding("P1", "LOW", confidence=0.6)],
+            "component_metadata": [],
+            "has_executable_scripts": False,
+            "manifest": {},
+            "skill_path": None,
+            "output_format": "sarif",
+        }
+        result = report(state)
+        sarif = json.loads(result["report_body"])
+        results = sarif["runs"][0]["results"]
+        assert len(results) == 1
+        props = results[0].get("properties", {})
+        assert "tags" not in props
+
+    def test_json_format_includes_tags_when_present(self) -> None:
+        """JSON report format includes tags in the issues list when populated."""
+        import json
+
+        tagged_finding = Finding(
+            rule_id="TP2",
+            message="unicode deception",
+            severity="HIGH",
+            confidence=0.9,
+            file="tool.json",
+            start_line=5,
+            tags=["mcp", "deception"],
+        )
+        state: SkillspectorState = {
+            "filtered_findings": [tagged_finding],
+            "component_metadata": [],
+            "has_executable_scripts": False,
+            "manifest": {"name": "test-skill"},
+            "skill_path": "/tmp/skill",
+            "output_format": "json",
+        }
+        result = report(state)
+        data = json.loads(result["report_body"])
+        issue = data["issues"][0]
+        assert issue["tags"] == ["mcp", "deception"]
+
+    def test_json_format_omits_tags_when_empty(self) -> None:
+        """JSON report format should not include 'tags' when findings have no tags."""
+        import json
+
+        state: SkillspectorState = {
+            "filtered_findings": [_finding("P1", "LOW")],
+            "component_metadata": [],
+            "has_executable_scripts": False,
+            "manifest": {},
+            "skill_path": None,
+            "output_format": "json",
+        }
+        result = report(state)
+        data = json.loads(result["report_body"])
+        issue = data["issues"][0]
+        assert "tags" not in issue

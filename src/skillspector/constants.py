@@ -26,16 +26,22 @@ logger = logging.getLogger(__name__)
 MAX_INPUT_TOKENS_PCT = 0.75
 # Fallback context length when no metadata API or registry entry is available.
 DEFAULT_CONTEXT_LENGTH = 128_000
+# Risk score threshold above which a scan is treated as unsafe.
+RISK_THRESHOLD = 50
+# Maximum text-file size processed by static analyzers and lightweight
+# format recognizers.
+MAX_FILE_BYTES = 1_000_000
 
-# Default-model selection lives on the Vertex provider (see
-# providers/vertex/provider.py for ``DEFAULT_MODEL`` and ``SLOT_DEFAULTS``).
-# The provider's ``resolve_model`` runs the waterfall: ``SKILLSPECTOR_MODEL``
-# env > slot default > general default.
+# Default-model selection lives on each provider (see providers/<name>/provider.py
+# for ``DEFAULT_MODEL`` and ``SLOT_DEFAULTS``).  The active provider's
+# ``resolve_model`` runs the waterfall: ``SKILLSPECTOR_MODEL`` env > slot
+# default > general default.  OSS users pointing at build.nvidia.com or
+# stock OpenAI inherit ``NvBuildProvider``'s default model automatically.
 _provider = get_metadata_provider()
 
 # Exposed for analyzers that need a final fallback symbol (e.g.,
 # ``model = state.model or MODEL_CONFIG[ANALYZER_ID] or _SKILLSPECTOR_DEFAULT_MODEL``).
-_SKILLSPECTOR_DEFAULT_MODEL = _provider.DEFAULT_MODEL  # type: ignore[attr-defined]
+_SKILLSPECTOR_DEFAULT_MODEL = _provider.DEFAULT_MODEL
 
 _MODEL_SLOTS: tuple[str, ...] = (
     "default",
@@ -49,21 +55,28 @@ _MODEL_SLOTS: tuple[str, ...] = (
 )
 
 
-def _resolve_slot_model(slot: str) -> str:
+def _resolve_slot_model(slot: str, provider=None) -> str:
     """Resolve the model for *slot* with per-slot env var override support.
 
     Precedence: ``SKILLSPECTOR_MODEL_{SLOT}`` env var > provider
     ``resolve_model(slot)`` (which itself runs ``SKILLSPECTOR_MODEL`` env >
     provider slot default > provider ``DEFAULT_MODEL``).
     """
+    provider = provider or get_metadata_provider()
     env_key = f"SKILLSPECTOR_MODEL_{slot.upper()}"
     env_val = os.environ.get(env_key, "").strip()
     if env_val:
         return env_val
-    return _provider.resolve_model(slot)
+    return provider.resolve_model(slot)
 
 
-MODEL_CONFIG: dict[str, str] = {slot: _resolve_slot_model(slot) for slot in _MODEL_SLOTS}
+def build_model_config() -> dict[str, str]:
+    """Resolve the model map for the currently active provider."""
+    provider = get_metadata_provider()
+    return {slot: _resolve_slot_model(slot, provider) for slot in _MODEL_SLOTS}
+
+
+MODEL_CONFIG: dict[str, str] = {slot: _resolve_slot_model(slot, _provider) for slot in _MODEL_SLOTS}
 
 
 def _validate_model_config() -> None:

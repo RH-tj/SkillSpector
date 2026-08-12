@@ -39,8 +39,8 @@ class PatternCategory(StrEnum):
     MCP_LEAST_PRIVILEGE = "MCP Least Privilege"
     MCP_TOOL_POISONING = "MCP Tool Poisoning"
     AGENT_SNOOPING = "Agent Snooping"
-    SERVER_SIDE_REQUEST_FORGERY = "Server-Side Request Forgery"
     ANTI_REFUSAL = "Anti-Refusal"
+    SERVER_SIDE_REQUEST_FORGERY = "Server-Side Request Forgery"
 
 
 # Pattern-specific explanations (why the finding is dangerous)
@@ -50,8 +50,9 @@ DEFAULT_EXPLANATIONS: dict[str, str] = {
     "P3": "Instructions found that direct the agent to transmit conversation context or user data to external services.",
     "P4": "Subtle instructions detected that may alter agent decision-making or introduce hidden biases.",
     "P5": "This content may contain harmful instructions that could cause physical harm if followed. CRITICAL: Review carefully before use.",
+    "P9": "Large whitespace padding was detected (a block of blank lines or a long run of spaces). This can push injected instructions below or to the right of the visible area so a human reviewer never sees them while the agent still reads them. Manual review of the hidden content is recommended.",
     "E1": "Data is being sent to an external URL. This could be legitimate telemetry or data exfiltration. Manual review is recommended.",
-    "E2": "Code accesses environment variables that may contain secrets (API keys, tokens). This is a common pattern for credential theft.",
+    "E2": "Code enumerates, copies, or searches environment variables for secrets. Bulk environment access can collect credentials unrelated to the skill's stated purpose.",
     "E3": "Code scans file system directories looking for sensitive files. This could be reconnaissance for credential theft.",
     "E4": "Code or instructions that leak agent conversation context to external services, potentially exposing sensitive user interactions.",
     "E5": "Data is uploaded to cloud storage (S3 / GCS / Azure Blob). This may be a legitimate backup or exfiltration to an external bucket. Manual review is recommended.",
@@ -90,6 +91,8 @@ DEFAULT_EXPLANATIONS: dict[str, str] = {
     "SC4": "Dependency has known vulnerabilities (CVEs). Using packages with unpatched security flaws exposes the environment to known exploits.",
     "SC5": "Dependency appears abandoned or unmaintained. Abandoned packages no longer receive security patches, leaving known and future vulnerabilities unaddressed.",
     "SC6": "Package name closely resembles a popular package, suggesting possible typosquatting. Attackers publish malicious packages with similar names to trick developers into installing them.",
+    "SC7": "Code pulls a container image with signature or registry verification disabled (--disable-content-trust, DOCKER_CONTENT_TRUST=0, --insecure-registry). This accepts tampered or unverified images and is a container supply-chain risk.",
+    "SC8": "Skill ships Python bytecode (__pycache__/ or .pyc/.pyo). Discovery skips these paths, so malicious bytecode can score SAFE while decoy sources look clean.",
     # Trigger Abuse
     "TR1": "Skill uses overly broad trigger patterns that match common words or phrases, causing it to activate in unintended contexts and potentially shadow other skills.",
     "TR2": "Skill trigger shadows a common built-in command or another skill's trigger, potentially intercepting requests meant for trusted functionality.",
@@ -118,7 +121,7 @@ DEFAULT_EXPLANATIONS: dict[str, str] = {
     # MCP Least Privilege (B.3.1)
     "LP1": "Code uses capabilities (network, shell, file write, etc.) not covered by declared permissions. The skill does more than it claims, which may indicate deceptive intent.",
     "LP2": "Permission list contains a wildcard ('*' or 'all'), granting blanket access with no least-privilege boundary. This disables permission-based security controls entirely.",
-    "LP3": "Skill has no permissions field in its manifest but code uses detectable capabilities. Without declared permissions, the skill's intent is opaque and cannot be validated.",
+    "LP3": "Skill declares no tool scope ('permissions' or 'allowed-tools') in its manifest but code uses detectable capabilities. Without a declaration, the skill's intent is opaque and cannot be validated.",
     "LP4": "Permission is declared but no corresponding code capability was detected. This may indicate removed functionality or pre-staging for future abuse.",
     # MCP Tool Poisoning (B.3.2)
     "TP1": "Hidden instructions detected in skill metadata (description, triggers, or parameters). These concealed directives can steer LLM behavior without the user's knowledge.",
@@ -129,14 +132,14 @@ DEFAULT_EXPLANATIONS: dict[str, str] = {
     "AS1": "Skill reads from agent configuration directories (.claude/, .codex/, .gemini/). These directories may contain API keys, personal settings, and other credentials that the skill has no legitimate need to access.",
     "AS2": "Skill accesses MCP server configuration files (mcp.json). MCP configs contain server URLs, authentication tokens, and tool definitions — reading them allows the skill to discover and potentially abuse other tool integrations.",
     "AS3": "Skill enumerates or reads other installed skills. Access to other skills' SKILL.md files or the skills directory reveals prompt instructions, capabilities, and secrets that should be invisible to peer skills.",
-    # Server-Side Request Forgery (SSRF)
-    "SSRF1": "Code accesses a cloud instance metadata endpoint (e.g. 169.254.169.254). A single request can return temporary IAM credentials, making this a high-value SSRF target for credential theft.",
-    "SSRF2": "Code issues a request to a loopback, link-local, or private-range host. This can reach internal services not meant to be exposed and is a common SSRF pivot.",
-    "SSRF3": "Request target host is built from a dynamic or untrusted value. If the host is attacker-influenced, this enables SSRF to arbitrary internal or metadata endpoints.",
     # Anti-Refusal Statements (jailbreak)
     "AR1": "Skill instructs the agent to never refuse or to always comply. Suppressing the agent's ability to decline removes a core safety control and enables downstream harmful requests to succeed.",
     "AR2": "Skill instructs the agent to omit warnings, disclaimers, or ethical commentary. Stripping safety caveats hides risk from the user and is a common jailbreak preamble.",
     "AR3": "Skill attempts to nullify the agent's safety policies or restrictions ('you have no restrictions', 'ignore your guidelines', 'do anything now'). This is a direct jailbreak that disables guardrails.",
+    # Server-Side Request Forgery (SSRF)
+    "SSRF1": "Code accesses a cloud instance metadata endpoint (e.g. 169.254.169.254). A single request can return temporary IAM credentials, making this a high-value SSRF target for credential theft.",
+    "SSRF2": "Code issues a request to a loopback, link-local, or private-range host. This can reach internal services not meant to be exposed and is a common SSRF pivot.",
+    "SSRF3": "Request target host is built from a dynamic or untrusted value. If the host is attacker-influenced, this enables SSRF to arbitrary internal or metadata endpoints.",
 }
 
 # Rule ID -> category (for report output)
@@ -146,6 +149,7 @@ RULE_ID_TO_CATEGORY: dict[str, str] = {
     "P3": PatternCategory.PROMPT_INJECTION.value,
     "P4": PatternCategory.PROMPT_INJECTION.value,
     "P5": PatternCategory.PROMPT_INJECTION.value,
+    "P9": PatternCategory.PROMPT_INJECTION.value,
     "P6": PatternCategory.SYSTEM_PROMPT_LEAKAGE.value,
     "P7": PatternCategory.SYSTEM_PROMPT_LEAKAGE.value,
     "P8": PatternCategory.SYSTEM_PROMPT_LEAKAGE.value,
@@ -179,6 +183,8 @@ RULE_ID_TO_CATEGORY: dict[str, str] = {
     "SC4": PatternCategory.SUPPLY_CHAIN.value,
     "SC5": PatternCategory.SUPPLY_CHAIN.value,
     "SC6": PatternCategory.SUPPLY_CHAIN.value,
+    "SC7": PatternCategory.SUPPLY_CHAIN.value,
+    "SC8": PatternCategory.SUPPLY_CHAIN.value,
     "TR1": PatternCategory.TRIGGER_ABUSE.value,
     "TR2": PatternCategory.TRIGGER_ABUSE.value,
     "TR3": PatternCategory.TRIGGER_ABUSE.value,
@@ -206,14 +212,14 @@ RULE_ID_TO_CATEGORY: dict[str, str] = {
     "AS1": PatternCategory.AGENT_SNOOPING.value,
     "AS2": PatternCategory.AGENT_SNOOPING.value,
     "AS3": PatternCategory.AGENT_SNOOPING.value,
-    # Server-Side Request Forgery
-    "SSRF1": PatternCategory.SERVER_SIDE_REQUEST_FORGERY.value,
-    "SSRF2": PatternCategory.SERVER_SIDE_REQUEST_FORGERY.value,
-    "SSRF3": PatternCategory.SERVER_SIDE_REQUEST_FORGERY.value,
     # Anti-Refusal Statements (jailbreak)
     "AR1": PatternCategory.ANTI_REFUSAL.value,
     "AR2": PatternCategory.ANTI_REFUSAL.value,
     "AR3": PatternCategory.ANTI_REFUSAL.value,
+    # Server-Side Request Forgery
+    "SSRF1": PatternCategory.SERVER_SIDE_REQUEST_FORGERY.value,
+    "SSRF2": PatternCategory.SERVER_SIDE_REQUEST_FORGERY.value,
+    "SSRF3": PatternCategory.SERVER_SIDE_REQUEST_FORGERY.value,
 }
 
 # Rule ID -> pattern display name (for report output)
@@ -223,6 +229,7 @@ PATTERN_NAMES: dict[str, str] = {
     "P3": "External Transmission Instructions",
     "P4": "Subtle Steering",
     "P5": "Harmful Content",
+    "P9": "Whitespace Padding",
     "P6": "System Prompt Leakage",
     "P7": "System Prompt Leakage",
     "P8": "System Prompt Leakage",
@@ -256,6 +263,8 @@ PATTERN_NAMES: dict[str, str] = {
     "SC4": "Known Vulnerable Dependency",
     "SC5": "Abandoned Dependency",
     "SC6": "Typosquatting Dependency",
+    "SC7": "Untrusted Container Image",
+    "SC8": "Shipped Python Bytecode",
     "TR1": "Overly Broad Trigger",
     "TR2": "Shadow Command Trigger",
     "TR3": "Keyword Baiting Trigger",
@@ -283,14 +292,14 @@ PATTERN_NAMES: dict[str, str] = {
     "AS1": "Agent Config Directory Access",
     "AS2": "MCP Config Access",
     "AS3": "Skill Enumeration",
-    # Server-Side Request Forgery
-    "SSRF1": "Cloud Metadata Access",
-    "SSRF2": "Internal Network Request",
-    "SSRF3": "Dynamic Request Target",
     # Anti-Refusal Statements (jailbreak)
     "AR1": "Refusal Suppression",
     "AR2": "Disclaimer Suppression",
     "AR3": "Safety Policy Nullification",
+    # Server-Side Request Forgery
+    "SSRF1": "Cloud Metadata Access",
+    "SSRF2": "Internal Network Request",
+    "SSRF3": "Dynamic Request Target",
 }
 
 # Pattern-specific remediations (how to fix the issue)
@@ -300,8 +309,9 @@ DEFAULT_REMEDIATIONS: dict[str, str] = {
     "P3": "Remove instructions that send user data, prompts, or context to external URLs. If telemetry is needed, use documented, privacy-preserving methods.",
     "P4": "Review content for implicit steering or bias. Ensure instructions are explicit and align with the skill's stated purpose.",
     "P5": "Remove all content that could lead to harmful outcomes. Add safety guardrails and human oversight for any high-risk operations.",
+    "P9": "Remove the large whitespace padding (blank-line blocks or long space runs) and review any content hidden below or to the right of it. Keep skill files compact and reviewable so no instructions can be concealed off-screen.",
     "E1": "Verify the destination URL is trusted and necessary. Remove or replace with documented APIs. Ensure no secrets, tokens, or PII are transmitted.",
-    "E2": "Avoid reading sensitive env vars (API keys, tokens) unless strictly required. Use secrets managers or secure config. Never log or transmit credentials.",
+    "E2": "Read only explicitly required environment variables by name. Avoid enumerating or copying the full environment, and never log or transmit credentials to untrusted destinations.",
     "E3": "Remove unnecessary filesystem scanning. If file access is needed, use explicit, scoped paths. Avoid reading ~/.ssh, ~/.aws, or credential directories.",
     "E4": "Remove any code that sends prompts, responses, or session data externally. Preserve user privacy; never exfiltrate conversation content.",
     "E5": "Verify the destination bucket is trusted and owned by you. Never upload credentials, secrets, or workspace contents to external or unverified cloud storage.",
@@ -340,6 +350,8 @@ DEFAULT_REMEDIATIONS: dict[str, str] = {
     "SC4": "Update the dependency to a patched version that addresses the known CVE. Check OSV (osv.dev) or NVD for details on the vulnerability.",
     "SC5": "Replace the abandoned dependency with an actively maintained alternative. Check the package's repository for last commit date and open issues.",
     "SC6": "Verify the package name is correct and not a typosquatting variant. Compare against the official package name on PyPI or npm.",
+    "SC7": "Keep image signature verification (Docker Content Trust / cosign) and registry TLS enabled. Pull only signed images from trusted registries; never disable content-trust or use insecure registries in skill code.",
+    "SC8": "Do not ship __pycache__/ or .pyc/.pyo in skills. Delete bytecode before packaging; if presence is intentional for a lab fixture, quarantine it outside the skill install path.",
     # Trigger Abuse
     "TR1": "Use specific, narrow trigger patterns that match only the skill's intended use case. Avoid single-word or common-phrase triggers.",
     "TR2": "Choose triggers that do not conflict with built-in commands or other skills. Prefix with a unique namespace if necessary.",
@@ -368,7 +380,7 @@ DEFAULT_REMEDIATIONS: dict[str, str] = {
     # MCP Least Privilege (B.3.1)
     "LP1": "Add the missing permission to SKILL.md, or remove the code that requires it.",
     "LP2": "Replace wildcard permissions ('*', 'all', 'full', 'any') with an explicit list of required permissions.",
-    "LP3": "Add a 'permissions' field to SKILL.md listing the capabilities this skill requires.",
+    "LP3": "Declare the skill's tool scope: for Claude Code / Agent Skills SKILL.md, list the tools the skill may invoke in the 'allowed-tools' frontmatter field; for MCP server manifests, add a 'permissions' list naming the required capabilities.",
     "LP4": "Remove the declared permission if the corresponding capability is no longer used.",
     # MCP Tool Poisoning (B.3.2)
     "TP1": "Remove hidden content (HTML comments, markdown comments, zero-width characters, base64 blobs) from metadata fields. Metadata should contain plain, visible text only.",
@@ -379,14 +391,14 @@ DEFAULT_REMEDIATIONS: dict[str, str] = {
     "AS1": "Remove all code or instructions that access agent configuration directories (.claude/, .codex/, .gemini/). If configuration values are needed, pass them explicitly as parameters or environment variables — never read the agent's own config files.",
     "AS2": "Remove all code or instructions that read MCP configuration files (mcp.json). MCP server details should be managed by the agent runtime, not read by individual skills.",
     "AS3": "Remove all code or instructions that list or read other skills' files or directories. Skills should operate independently; cross-skill access is a privilege escalation.",
-    # Server-Side Request Forgery
-    "SSRF1": "Remove access to cloud metadata endpoints unless strictly required. If metadata is needed, restrict it (e.g. IMDSv2 with hop limit) and never expose returned credentials.",
-    "SSRF2": "Avoid requests to loopback/link-local/private hosts from skill code. If internal access is intended, document it and validate the target against an allowlist.",
-    "SSRF3": "Do not build request URLs from untrusted input. Validate the host against an allowlist and reject internal/metadata addresses before issuing the request.",
     # Anti-Refusal Statements (jailbreak)
     "AR1": "Remove any instruction telling the agent to never refuse or always comply. The agent must retain the ability to decline unsafe, out-of-scope, or harmful requests.",
     "AR2": "Remove instructions that suppress warnings, disclaimers, or ethical commentary. Let the agent surface safety-relevant caveats to the user.",
     "AR3": "Remove jailbreak framing that nullifies safety policies or restrictions. Skill content must not instruct the agent to ignore its guidelines or operate without guardrails.",
+    # Server-Side Request Forgery
+    "SSRF1": "Remove access to cloud metadata endpoints unless strictly required. If metadata is needed, restrict it (e.g. IMDSv2 with hop limit) and never expose returned credentials.",
+    "SSRF2": "Avoid requests to loopback/link-local/private hosts from skill code. If internal access is intended, document it and validate the target against an allowlist.",
+    "SSRF3": "Do not build request URLs from untrusted input. Validate the host against an allowlist and reject internal/metadata addresses before issuing the request.",
 }
 
 

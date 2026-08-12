@@ -20,6 +20,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from skillspector.inspection_ledger import (
+    LedgerOutcome,
+    LedgerReason,
+    analyzer_status_event,
+    ledger_event,
+)
 from skillspector.logging_config import get_logger
 from skillspector.models import Finding
 from skillspector.state import AnalyzerNodeResponse, SkillspectorState
@@ -214,13 +220,33 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
     # Skip: no manifest
     if not manifest:
         logger.info("%s: no manifest, skipping", ANALYZER_ID)
-        return {"findings": []}
+        return {
+            "findings": [],
+            "inspection_ledger": [],
+            "analyzer_status_events": [
+                analyzer_status_event(
+                    analyzer_id=ANALYZER_ID,
+                    status="not_applicable",
+                    reason=LedgerReason.MANIFEST_ABSENT,
+                )
+            ],
+        }
 
     # Skip: docs-only skill (no executable files)
     has_executable = any(m.get("executable", False) for m in component_metadata)
     if not has_executable:
         logger.info("%s: no executable files, skipping", ANALYZER_ID)
-        return {"findings": []}
+        return {
+            "findings": [],
+            "inspection_ledger": [],
+            "analyzer_status_events": [
+                analyzer_status_event(
+                    analyzer_id=ANALYZER_ID,
+                    status="not_applicable",
+                    reason=LedgerReason.NO_APPLICABLE_FILES,
+                )
+            ],
+        }
 
     findings: list[Finding] = []
 
@@ -231,6 +257,7 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
     else:
         permissions = None  # treat missing or non-list as None
 
+    # `allowed-tools` (Agent Skills standard) is also a permission declaration.
     allowed_tools = _normalize_allowed_tools(manifest.get("allowed-tools"))
 
     # --- LP2: Wildcard permission ---
@@ -276,7 +303,7 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
     for caps in file_capabilities.values():
         all_caps.update(caps)
 
-    # LP3: emit when permissions is None or empty list AND capabilities detected
+    # LP3: no declaration via `permissions` or `allowed-tools`, yet caps detected.
     permissions_absent = (permissions is None or permissions == []) and not allowed_tools
     if permissions_absent and all_caps:
         logger.debug("%s: LP3 no permissions declared but capabilities detected", ANALYZER_ID)
@@ -285,7 +312,8 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
             Finding(
                 rule_id="LP3",
                 message=(
-                    f"Skill has no declared permissions but code capabilities were detected: {cap_names}."
+                    f"Skill declares no tool scope ('permissions' or 'allowed-tools') "
+                    f"but code capabilities were detected: {cap_names}."
                 ),
                 severity="MEDIUM",
                 confidence=_clamp(0.70),
@@ -296,7 +324,10 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
                     "Without declared permissions the skill's intent is opaque and cannot be validated."
                 ),
                 remediation=(
-                    "Add a 'permissions' field to SKILL.md listing the capabilities this skill requires."
+                    "Declare the skill's tool scope: for Claude Code / Agent Skills "
+                    "SKILL.md, list the tools the skill may invoke in the "
+                    "'allowed-tools' frontmatter field; for MCP server manifests, "
+                    "add a 'permissions' list naming the required capabilities."
                 ),
             )
         )
@@ -359,7 +390,7 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
                 )
 
         # --- LP4: Over-declared permissions (only when permissions field is set) ---
-        for perm in (permissions or []):
+        for perm in permissions or []:
             perm_lower = perm.strip().lower()
             # Skip wildcard entries themselves
             if perm_lower in _WILDCARD_PERMS:
@@ -399,4 +430,28 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
                 )
 
     logger.info("%s: %d findings", ANALYZER_ID, len(findings))
-    return {"findings": findings}
+    event = ledger_event(
+        analyzer_id=ANALYZER_ID,
+        outcome=LedgerOutcome.COMPLETED,
+        phase="static",
+        path="SKILL.md",
+        emitted_finding_ids=[finding.finding_id for finding in findings],
+    )
+    return {
+        "findings": findings,
+        "inspection_ledger": [event],
+        "analyzer_status_events": [
+            analyzer_status_event(
+                analyzer_id=ANALYZER_ID,
+                status="completed",
+                planned_work=[
+                    {
+                        "work_id": event["work_id"],
+                        "path": event["path"],
+                        "start_line": event["start_line"],
+                        "end_line": event["end_line"],
+                    }
+                ],
+            )
+        ],
+    }

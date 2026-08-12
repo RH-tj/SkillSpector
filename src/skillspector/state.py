@@ -30,6 +30,20 @@ InferenceUsageRecord = dict[str, object]
 AnalysisCompleteness = dict[str, object]
 
 
+def merge_findings_by_id(existing: list[Finding], updates: list[Finding]) -> list[Finding]:
+    """Merge findings by opaque ID, replacing enriched instances in place."""
+    merged = list(existing)
+    positions = {finding.finding_id: index for index, finding in enumerate(merged)}
+    for finding in updates:
+        position = positions.get(finding.finding_id)
+        if position is None:
+            positions[finding.finding_id] = len(merged)
+            merged.append(finding)
+        else:
+            merged[position] = finding
+    return merged
+
+
 class SkillspectorState(TypedDict, total=False):
     """Graph state shared by all nodes."""
 

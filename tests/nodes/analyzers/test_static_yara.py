@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 from skillspector.nodes.analyzers import static_yara
-from skillspector.nodes.analyzers.static_runner import MAX_FILE_BYTES
+from skillspector.nodes.analyzers.static_runner import MAX_FILE_CHARS
 
 
 @pytest.fixture(autouse=True)
@@ -265,7 +265,7 @@ class TestEdgeCases:
         _write_rule(
             tmp_path, "rule_big", category="malware", severity="HIGH", strings={"a": "BIGMARKER"}
         )
-        content = "BIGMARKER" + ("x" * MAX_FILE_BYTES)
+        content = "BIGMARKER" + ("x" * MAX_FILE_CHARS)
         findings = _run(content, "big.txt", str(tmp_path))
         assert findings == []
 

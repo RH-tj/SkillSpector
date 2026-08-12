@@ -130,7 +130,7 @@ def _build_sarif_properties(finding: Finding) -> dict[str, object] | None:
         "remediation": finding_dict["remediation"],
         "code_snippet": finding_dict["code_snippet"],
         "intent": finding_dict["intent"],
-        "tags": finding_dict["tags"],
+        "tags": finding.tags or None,
     }
     cleaned = {key: value for key, value in metadata.items() if value is not None}
     return cleaned or None

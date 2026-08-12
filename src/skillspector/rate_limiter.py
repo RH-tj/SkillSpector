@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 import threading
 import time
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 ADAPTIVE_THRESHOLD = 50
 _AGGRESSIVE_CONCURRENCY = 10
 _THROTTLED_CONCURRENCY = 5
+_ENV_CONCURRENCY_KEY = "SKILLSPECTOR_MAX_LLM_CONCURRENCY"
 
 _BACKOFF_BASE = 4.0
 _BACKOFF_MAX = 120.0
@@ -42,8 +44,30 @@ _semaphore = threading.Semaphore(_THROTTLED_CONCURRENCY)
 
 
 def configure(file_count: int) -> None:
-    """Set limiter mode based on scan size.  Must be called before LLM calls."""
+    """Set limiter mode based on scan size.  Must be called before LLM calls.
+
+    If ``SKILLSPECTOR_MAX_LLM_CONCURRENCY`` is set, that value overrides the
+    adaptive logic entirely (user-specified concurrency wins).
+    """
     global _throttled, _concurrency, _semaphore
+
+    env_override = os.environ.get(_ENV_CONCURRENCY_KEY, "").strip()
+    if env_override:
+        try:
+            explicit = max(1, int(env_override))
+            _throttled = True
+            _concurrency = explicit
+            _semaphore = threading.Semaphore(explicit)
+            logger.info(
+                "Rate limiter: env override %s=%d (file_count=%d ignored)",
+                _ENV_CONCURRENCY_KEY, explicit, file_count,
+            )
+            return
+        except ValueError:
+            logger.warning(
+                "Invalid %s=%r; falling back to adaptive logic",
+                _ENV_CONCURRENCY_KEY, env_override,
+            )
 
     if file_count <= ADAPTIVE_THRESHOLD:
         _throttled = False

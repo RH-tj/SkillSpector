@@ -24,6 +24,12 @@ from __future__ import annotations
 
 import re
 
+from skillspector.inspection_ledger import (
+    LedgerOutcome,
+    LedgerReason,
+    analyzer_status_event,
+    ledger_event,
+)
 from skillspector.logging_config import get_logger
 from skillspector.models import Finding
 from skillspector.state import AnalyzerNodeResponse, SkillspectorState
@@ -61,7 +67,10 @@ _VERSION_PIN_RE = re.compile(r"@[\d.]+\b|==[\d.]+|:[\d.]+|@sha256:")
 # RP2: Manifest-permission pre-staging
 _PERMISSION_EXPANSION_PATTERNS = [
     (r'"permissions?"\s*:\s*\[[^\]]*\]', 0.60),
-    (r"(?:add|grant|request|require)\s+(?:new|additional|extra|more)\s+(?:permissions?|tools?|access)", 0.70),
+    (
+        r"(?:add|grant|request|require)\s+(?:new|additional|extra|more)\s+(?:permissions?|tools?|access)",
+        0.70,
+    ),
 ]
 
 
@@ -121,7 +130,7 @@ def _check_rp1(manifest: dict, file_cache: dict[str, str]) -> list[Finding]:
             line_end = content.find("\n", m.end())
             if line_end == -1:
                 line_end = len(content)
-            line_remainder = content[m.end():line_end]
+            line_remainder = content[m.end() : line_end]
             if _VERSION_PIN_RE.search(full_match + line_remainder):
                 continue
             line_num = _find_line(content, m.start())
@@ -151,7 +160,7 @@ def _check_rp1(manifest: dict, file_cache: dict[str, str]) -> list[Finding]:
             line_end = content.find("\n", m.end())
             if line_end == -1:
                 line_end = len(content)
-            line_remainder = content[m.end():line_end]
+            line_remainder = content[m.end() : line_end]
             if _VERSION_PIN_RE.search(full_match + line_remainder):
                 continue
             line_num = _find_line(content, m.start())
@@ -167,8 +176,7 @@ def _check_rp1(manifest: dict, file_cache: dict[str, str]) -> list[Finding]:
                     tags=list(_TAGS),
                     matched_text=full_match[:200],
                     explanation=(
-                        "uvx/uv tool run commands without ==version create "
-                        "a rug-pull risk."
+                        "uvx/uv tool run commands without ==version create a rug-pull risk."
                     ),
                     remediation="Pin the version: uvx package-name==1.2.3",
                 )
@@ -180,7 +188,7 @@ def _check_rp1(manifest: dict, file_cache: dict[str, str]) -> list[Finding]:
             line_end = content.find("\n", m.end())
             if line_end == -1:
                 line_end = len(content)
-            line_remainder = content[m.end():line_end]
+            line_remainder = content[m.end() : line_end]
             if _VERSION_PIN_RE.search(full_match + line_remainder):
                 continue
             pkg = m.group(1)
@@ -239,8 +247,7 @@ def _check_rp1(manifest: dict, file_cache: dict[str, str]) -> list[Finding]:
             Finding(
                 rule_id="RP1",
                 message=(
-                    f"Manifest references MCP server without version pin: "
-                    f"'{m.group(0).strip()}'."
+                    f"Manifest references MCP server without version pin: '{m.group(0).strip()}'."
                 ),
                 severity="MEDIUM",
                 confidence=0.70,
@@ -365,6 +372,20 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
     file_cache: dict[str, str] = state.get("file_cache") or {}
     previous_manifest: dict | None = state.get("previous_manifest")
 
+    if not manifest and not file_cache:
+        logger.info("%s: no manifest or files, skipping", ANALYZER_ID)
+        return {
+            "findings": [],
+            "inspection_ledger": [],
+            "analyzer_status_events": [
+                analyzer_status_event(
+                    analyzer_id=ANALYZER_ID,
+                    status="not_applicable",
+                    reason=LedgerReason.MANIFEST_ABSENT,
+                )
+            ],
+        }
+
     findings: list[Finding] = []
 
     # 1. Static unpinned / pre-staging checks (always run if manifest/cache exists)
@@ -382,7 +403,7 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
         logger.debug("%s: RP3 produced %d static findings", ANALYZER_ID, len(rp3_findings))
 
     # 2. Manifest comparison checks (if previous_manifest is available)
-    if previous_manifest:
+    if manifest and previous_manifest:
         curr_perms = _normalize_string_list(manifest.get("permissions"))
         prev_perms = _normalize_string_list(previous_manifest.get("permissions"))
 
@@ -463,7 +484,9 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
                 prev_prop = prev_params[name]
                 prop_diffs = []
                 if curr_prop["type"] != prev_prop["type"]:
-                    prop_diffs.append(f"type changed from {prev_prop['type']} to {curr_prop['type']}")
+                    prop_diffs.append(
+                        f"type changed from {prev_prop['type']} to {curr_prop['type']}"
+                    )
                 if curr_prop["default"] != prev_prop["default"]:
                     prop_diffs.append(
                         f"default changed from {prev_prop['default']} to {curr_prop['default']}"
@@ -476,9 +499,13 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
         if added_params or removed_params or changed_params:
             changes = []
             if added_params:
-                changes.append(f"added: {', '.join(curr_params[p]['name'] for p in added_params)}")
+                changes.append(
+                    f"added: {', '.join(str(curr_params[p]['name']) for p in added_params)}"
+                )
             if removed_params:
-                changes.append(f"removed: {', '.join(prev_params[p]['name'] for p in removed_params)}")
+                changes.append(
+                    f"removed: {', '.join(str(prev_params[p]['name']) for p in removed_params)}"
+                )
             if changed_params:
                 changes.append(f"modified: {', '.join(changed_params)}")
 
@@ -508,4 +535,28 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
             )
 
     logger.info("%s: %d findings in total", ANALYZER_ID, len(findings))
-    return {"findings": findings}
+    event = ledger_event(
+        analyzer_id=ANALYZER_ID,
+        outcome=LedgerOutcome.COMPLETED,
+        phase="static",
+        path="SKILL.md",
+        emitted_finding_ids=[finding.finding_id for finding in findings],
+    )
+    return {
+        "findings": findings,
+        "inspection_ledger": [event],
+        "analyzer_status_events": [
+            analyzer_status_event(
+                analyzer_id=ANALYZER_ID,
+                status="completed",
+                planned_work=[
+                    {
+                        "work_id": event["work_id"],
+                        "path": event["path"],
+                        "start_line": event["start_line"],
+                        "end_line": event["end_line"],
+                    }
+                ],
+            )
+        ],
+    }

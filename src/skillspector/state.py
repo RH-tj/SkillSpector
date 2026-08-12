@@ -22,7 +22,26 @@ from typing import Annotated
 
 from typing_extensions import TypedDict
 
+from skillspector.inspection_ledger import AnalyzerStatusEvent, InspectionLedgerEvent
 from skillspector.models import Finding
+
+LLMCallRecord = dict[str, object]
+InferenceUsageRecord = dict[str, object]
+AnalysisCompleteness = dict[str, object]
+
+
+def merge_findings_by_id(existing: list[Finding], updates: list[Finding]) -> list[Finding]:
+    """Merge findings by opaque ID, replacing enriched instances in place."""
+    merged = list(existing)
+    positions = {finding.finding_id: index for index, finding in enumerate(merged)}
+    for finding in updates:
+        position = positions.get(finding.finding_id)
+        if position is None:
+            positions[finding.finding_id] = len(merged)
+            merged.append(finding)
+        else:
+            merged[position] = finding
+    return merged
 
 
 class SkillspectorState(TypedDict, total=False):
@@ -40,12 +59,20 @@ class SkillspectorState(TypedDict, total=False):
     components: list[str]
     file_cache: dict[str, str]
     ast_cache: dict[str, str]
+    python_ast_cache_key: str | None
     manifest: dict[str, object]
     previous_manifest: dict[str, object] | None
 
     # Accumulated findings (reducer: analyzer nodes append to this list)
     findings: Annotated[list[Finding], operator.add]
     filtered_findings: list[Finding]
+
+    # Inspection ledger: execution accounting across all analyzer nodes
+    inspection_ledger: Annotated[list[InspectionLedgerEvent], operator.add]
+    analyzer_status_events: Annotated[list[AnalyzerStatusEvent], operator.add]
+    effective_finding_ids: list[str]
+    analysis_completeness: AnalysisCompleteness
+    execution_successful: bool
 
     # Model IDs per LLM-using node: e.g. {"default": "...", "meta_analyzer": "..."}
     model_config: dict[str, str]
@@ -74,7 +101,16 @@ class SkillspectorState(TypedDict, total=False):
     yara_rules_dir: str | None
 
     # LLM call telemetry — each LLM-backed node appends one record per run.
-    llm_call_log: Annotated[list[dict[str, object]], operator.add]
+    llm_call_log: Annotated[list[LLMCallRecord], operator.add]
+
+    # Inference usage — provider-reported token counters per call.
+    inference_usage: Annotated[list[InferenceUsageRecord], operator.add]
+
+    # Baseline / false-positive suppression
+    baseline: object | None
+    baseline_path: str | None
+    show_suppressed: bool
+    suppressed_findings: list[object]
 
 
 class AnalyzerNodeResponse(TypedDict):
@@ -87,14 +123,16 @@ class MetaAnalyzerResponse(TypedDict, total=False):
     """Strict meta-analyzer update payload for graph state."""
 
     filtered_findings: list[Finding]
-    llm_call_log: list[dict[str, object]]
+    llm_call_log: list[LLMCallRecord]
+    inspection_ledger: list[InspectionLedgerEvent]
+    analyzer_status_events: list[AnalyzerStatusEvent]
 
 
 def llm_call_record(
     node: str, *, ok: bool, error: str | None = None
-) -> dict[str, object]:
+) -> LLMCallRecord:
     """Build a telemetry record for the llm_call_log reducer."""
-    rec: dict[str, object] = {"node": node, "ok": ok}
+    rec: LLMCallRecord = {"node": node, "ok": ok}
     if error is not None:
         rec["error"] = error
     return rec

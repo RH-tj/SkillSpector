@@ -65,6 +65,13 @@ class SarifMessage(BaseModel):
     text: str
 
 
+class SarifSuppression(BaseModel):
+    """SARIF suppression object — marks a result as suppressed (e.g. via a baseline)."""
+
+    kind: Literal["inSource", "external"] = "external"
+    justification: str | None = None
+
+
 class SarifResult(BaseModel):
     """A single analysis result (finding)."""
 
@@ -74,6 +81,10 @@ class SarifResult(BaseModel):
     message: SarifMessage
     level: Literal["error", "warning", "note"] = "warning"
     locations: list[SarifLocation]
+    # When present, the result is suppressed; SARIF consumers (e.g. GitHub code
+    # scanning) exclude suppressed results from counts but keep them for audit.
+    suppressions: list[SarifSuppression] | None = None
+    properties: dict[str, object] | None = None
 
 
 class SarifReportingDescriptor(BaseModel):
@@ -108,12 +119,40 @@ class SarifArtifact(BaseModel):
     location: SarifArtifactLocation
 
 
+class SarifNotification(BaseModel):
+    """A notification about a condition encountered during tool execution."""
+
+    text: SarifMessage = Field(alias="message")
+    level: Literal["error", "warning", "note"] = "warning"
+    locations: list[SarifLocation] | None = None
+    properties: dict[str, object] | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class SarifInvocation(BaseModel):
+    """Describes a single tool invocation (SARIF ``run.invocations[]``).
+
+    ``executionSuccessful`` is derived from the canonical inspection ledger.
+    """
+
+    model_config = {"populate_by_name": True}
+
+    execution_successful: bool = Field(alias="executionSuccessful")
+    tool_execution_notifications: list[SarifNotification] | None = Field(
+        default=None, alias="toolExecutionNotifications"
+    )
+
+
 class SarifRun(BaseModel):
     """A single run (one tool invocation)."""
+
+    model_config = {"populate_by_name": True}
 
     tool: SarifTool
     results: list[SarifResult] = Field(default_factory=list)
     artifacts: list[SarifArtifact] | None = None
+    invocations: list[SarifInvocation] | None = None
 
 
 class SarifLog(BaseModel):

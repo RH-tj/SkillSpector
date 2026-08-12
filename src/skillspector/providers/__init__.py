@@ -19,8 +19,13 @@ def get_metadata_provider() -> ModelMetadataProvider:
     return VertexProvider()
 
 
+# Upstream uses get_active_provider; alias for compatibility
+get_active_provider = get_metadata_provider
+
+
 __all__ = [
     "ModelMetadataProvider",
     "VertexProvider",
     "get_metadata_provider",
+    "get_active_provider",
 ]

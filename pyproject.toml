@@ -33,6 +33,7 @@ dependencies = [
     "typer>=0.23.0,<0.24",
     "rich>=14.3.0",
     "httpx>=0.28.0",
+    "packaging>=24.0",
     "pyyaml>=6.0.1",
     "pydantic>=2.12.0",
     "langgraph>=1.0.10",
@@ -45,6 +46,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+mcp = [
+    "mcp>=1.29.0,<2.0.0",
+]
 dev = [
     "pytest>=9.0.0",
     "pytest-asyncio>=1.3.0",
@@ -71,6 +75,7 @@ exclude = [".claude/", ".cursor/", ".agents/"]
 packages = ["src/skillspector"]
 artifacts = [
     "src/skillspector/yara_rules/*.yar",
+    "src/skillspector/yara_rules/*.yar.b64",
     "src/skillspector/yara_rules/*.yara",
     "src/skillspector/providers/*/model_registry.yaml",
 ]

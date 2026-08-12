@@ -22,14 +22,27 @@ LangChain structured output for validated, schema-driven LLM responses.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from skillspector.constants import MODEL_CONFIG
+from skillspector.inspection_ledger import (
+    AnalyzerStatusEvent,
+    InspectionLedgerEvent,
+    LedgerOutcome,
+    LedgerReason,
+    analyzer_status_event,
+    analyzer_status_for_events,
+    inspection_work_id,
+    ledger_event,
+    outcome_for_llm_batch_failure,
+)
 from skillspector.llm_analyzer_base import (
     Batch,
+    BatchExecutionResult,
+    BatchFailure,
     LLMAnalyzerBase,
     estimate_tokens,
 )
@@ -238,6 +251,39 @@ def _fallback_filtered(findings: list[Finding]) -> list[Finding]:
         Finding(
             rule_id=f.rule_id,
             message=f.message,
+            finding_id=f.finding_id,
+            severity=f.severity,
+            confidence=f.confidence,
+            file=f.file,
+            start_line=f.start_line,
+            end_line=f.end_line,
+            remediation=f.remediation or get_remediation(f.rule_id),
+            tags=f.tags,
+            context=f.context,
+            matched_text=f.matched_text,
+            category=getattr(f, "category", None),
+            pattern=getattr(f, "pattern", None),
+            finding=getattr(f, "finding", None),
+            explanation=getattr(f, "explanation", None),
+            code_snippet=getattr(f, "code_snippet", None) or f.context,
+            intent=None,
+        )
+        for f in findings
+    ]
+
+
+def _passthrough_with_defaults(findings: list[Finding]) -> list[Finding]:
+    """Pass all findings through with default remediations (fail-closed).
+
+    Used on LLM failure path: when the LLM call fails, we pass ALL findings
+    through unchanged (except adding default remediations). A security tool
+    should fail-closed — showing more findings is safer than silently dropping.
+    """
+    return [
+        Finding(
+            rule_id=f.rule_id,
+            message=f.message,
+            finding_id=f.finding_id,
             severity=f.severity,
             confidence=f.confidence,
             file=f.file,
@@ -273,7 +319,7 @@ class LLMMetaAnalyzer(LLMAnalyzerBase):
     response_schema = MetaAnalyzerResult
 
     def __init__(self, model: str):
-        super().__init__(base_prompt=PER_FILE_ANALYSIS_PROMPT, model=model)
+        super().__init__(base_prompt=PER_FILE_ANALYSIS_PROMPT, model=model, node="meta_analyzer")
 
     def _estimate_extra_overhead(self, findings: list[Finding]) -> int:
         if not findings:
@@ -486,6 +532,76 @@ class LLMMetaAnalyzer(LLMAnalyzerBase):
 
 
 # ---------------------------------------------------------------------------
+# Ledger helpers
+# ---------------------------------------------------------------------------
+
+
+def _meta_batch_work_id(batch: Batch) -> str:
+    """Return the ledger identity for one submitted meta-analysis batch."""
+    return inspection_work_id(
+        "meta_analyzer",
+        batch.file_path,
+        batch.start_line if batch.end_line is not None else None,
+        batch.end_line,
+    )
+
+
+def _meta_ledger_response(
+    batches: list[Batch],
+    outcome: BatchExecutionResult,
+    filtered: list[Finding],
+) -> tuple[list[InspectionLedgerEvent], AnalyzerStatusEvent]:
+    """Account for each meta batch while preserving fail-closed finding identity."""
+    retained_ids = {finding.finding_id for finding in filtered}
+    completed_ids = {
+        finding.finding_id for batch, _ in outcome.successful for finding in batch.findings
+    }
+    events: list[InspectionLedgerEvent] = []
+    for batch, _ in outcome.successful:
+        input_ids = [finding.finding_id for finding in batch.findings]
+        events.append(
+            ledger_event(
+                analyzer_id="meta_analyzer",
+                outcome=LedgerOutcome.COMPLETED,
+                phase="meta",
+                path=batch.file_path,
+                start_line=batch.start_line if batch.end_line is not None else None,
+                end_line=batch.end_line,
+                input_finding_ids=input_ids,
+                emitted_finding_ids=[
+                    finding_id for finding_id in input_ids if finding_id in retained_ids
+                ],
+            )
+        )
+    for failure in outcome.failures:
+        batch = failure.batch
+        input_ids = [
+            finding.finding_id
+            for finding in batch.findings
+            if finding.finding_id not in completed_ids
+        ]
+        if not input_ids:
+            continue
+        events.append(
+            ledger_event(
+                analyzer_id="meta_analyzer",
+                outcome=outcome_for_llm_batch_failure(failure.reason),
+                phase="meta",
+                path=batch.file_path,
+                start_line=batch.start_line if batch.end_line is not None else None,
+                end_line=batch.end_line,
+                reason=failure.reason,
+                input_finding_ids=input_ids,
+                emitted_finding_ids=input_ids,
+                error_class=failure.error_class,
+            )
+        )
+    if not events:
+        return events, analyzer_status_event(analyzer_id="meta_analyzer", status="completed")
+    return events, analyzer_status_for_events("meta_analyzer", events)
+
+
+# ---------------------------------------------------------------------------
 # Graph node
 # ---------------------------------------------------------------------------
 
@@ -493,34 +609,61 @@ class LLMMetaAnalyzer(LLMAnalyzerBase):
 def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
     """Filter and enrich findings via per-file LLM calls.
 
-    When ``use_llm`` is *True* and an LLM API key is configured (see
-    ``llm_utils._resolve_llm_credentials``), each file that has at least one
-    finding gets its own LLM call (or multiple calls if the file is too
-    large for the model's input budget).  Findings are matched back by
-    ``(file, rule_id)`` so enrichment is precise.
+    When ``use_llm`` is *True* and Vertex AI is configured, each file that
+    has at least one finding gets its own LLM call (or multiple calls if
+    the file is too large for the model's input budget).
 
-    Falls back to default remediations when ``use_llm`` is *False* or when
-    an LLM call fails.
+    Fail-closed: on LLM failure, passes all findings through with defaults
+    rather than silently dropping them.
     """
+    import asyncio
+
     findings: list[Finding] = state.get("findings", [])
     if not findings:
-        return {"filtered_findings": []}
+        return {
+            "filtered_findings": [],
+            "inspection_ledger": [],
+            "analyzer_status_events": [
+                analyzer_status_event(
+                    analyzer_id="meta_analyzer",
+                    status="not_applicable",
+                    reason=LedgerReason.NO_APPLICABLE_FILES,
+                )
+            ],
+        }
 
     if state.get("use_llm", True) is False:
-        return {"filtered_findings": _fallback_filtered(findings)}
+        filtered = _fallback_filtered(findings)
+        return {
+            "filtered_findings": filtered,
+            "inspection_ledger": [],
+            "analyzer_status_events": [
+                analyzer_status_event(
+                    analyzer_id="meta_analyzer",
+                    status="disabled",
+                    reason=LedgerReason.DISABLED_BY_CONFIGURATION,
+                )
+            ],
+        }
 
     file_cache: dict[str, str] = state.get("file_cache") or {}
     manifest: dict[str, object] = state.get("manifest") or {}
-    model_config: dict[str, str] = state.get("model_config") or {}
-    model = model_config.get("meta_analyzer")
+    model_config_state: dict[str, str] = state.get("model_config") or {}
+    model = (
+        model_config_state.get("meta_analyzer")
+        or model_config_state.get("default")
+        or MODEL_CONFIG.get("default")
+    )
 
     metadata_text = _format_metadata(manifest)
     files_with_findings = sorted({f.file for f in findings})
 
-    analyzer = LLMMetaAnalyzer(model=model)
-
+    analyzer: LLMMetaAnalyzer | None = None
+    batches: list[Batch] = []
     try:
+        analyzer = LLMMetaAnalyzer(model=model)
         batches = analyzer.get_batches(files_with_findings, file_cache, findings)
+        batches = [batch for batch in batches if batch.findings]
         logger.debug(
             "Meta-analyzer: %d files -> %d batches (model=%s)",
             len(files_with_findings),
@@ -530,10 +673,36 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
 
         batch_results = asyncio.run(analyzer.arun_batches(batches, metadata_text=metadata_text))
 
+        submitted_batches = {_meta_batch_work_id(batch): batch for batch in batches}
+        returned_by_work_id: dict[str, tuple[Batch, list]] = {}
+        for returned_batch, response_findings in batch_results:
+            work_id = _meta_batch_work_id(returned_batch)
+            if work_id in submitted_batches and work_id not in returned_by_work_id:
+                returned_by_work_id[work_id] = (submitted_batches[work_id], response_findings)
+        batch_results = [
+            returned_by_work_id[work_id]
+            for batch in batches
+            if (work_id := _meta_batch_work_id(batch)) in returned_by_work_id
+        ]
+
+        detailed = getattr(analyzer, "_last_batch_outcome", None)
+        if not isinstance(detailed, BatchExecutionResult):
+            successful_work_ids = set(returned_by_work_id)
+            detailed = BatchExecutionResult(
+                successful=batch_results,
+                failures=[
+                    BatchFailure(batch=batch, error_class="MissingBatchResult")
+                    for batch in batches
+                    if _meta_batch_work_id(batch) not in successful_work_ids
+                ],
+            )
+
         if len(batch_results) < len(batches):
-            analysed_ids = {id(f) for batch, _ in batch_results for f in batch.findings}
-            analysed = [f for f in findings if id(f) in analysed_ids]
-            unanalysed = [f for f in findings if id(f) not in analysed_ids]
+            analysed_ids = {
+                finding.finding_id for batch, _ in batch_results for finding in batch.findings
+            }
+            analysed = [f for f in findings if f.finding_id in analysed_ids]
+            unanalysed = [f for f in findings if f.finding_id not in analysed_ids]
         else:
             analysed, unanalysed = findings, []
 
@@ -554,9 +723,17 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
             len(findings),
             len(filtered),
         )
+        ledger_events, status = _meta_ledger_response(batches, detailed, filtered)
         return {
             "filtered_findings": filtered,
-            "llm_call_log": [llm_call_record("meta_analyzer", ok=True)],
+            "inspection_ledger": ledger_events,
+            "analyzer_status_events": [status],
+            "llm_call_log": [
+                llm_call_record(
+                    "meta_analyzer",
+                    ok=bool(detailed.successful) or not detailed.failures,
+                )
+            ],
         }
     except ValueError:
         raise
@@ -565,10 +742,26 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
             raise
         import traceback
         logger.warning(
-            "Meta-analyzer LLM call failed (%s: %s), using fallback. Traceback:\n%s",
+            "Meta-analyzer LLM call failed (%s: %s), using fail-closed pass-through. Traceback:\n%s",
             type(e).__name__, e, traceback.format_exc()
         )
+        filtered = _passthrough_with_defaults(findings)
+        if analyzer is not None and batches:
+            ledger_events, status = _meta_ledger_response(
+                batches,
+                BatchExecutionResult(
+                    failures=[
+                        BatchFailure(batch=batch, error_class=type(e).__name__) for batch in batches
+                    ]
+                ),
+                filtered,
+            )
+        else:
+            ledger_events = []
+            status = analyzer_status_event(analyzer_id="meta_analyzer", status="unavailable")
         return {
-            "filtered_findings": _fallback_filtered(findings),
+            "filtered_findings": filtered,
+            "inspection_ledger": ledger_events,
+            "analyzer_status_events": [status],
             "llm_call_log": [llm_call_record("meta_analyzer", ok=False, error=str(e))],
         }

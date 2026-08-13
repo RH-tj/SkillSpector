@@ -37,6 +37,7 @@ upstream (`nvidia/SkillSpector`). Read this file first in any future sync sessio
 |-----------|-------------|
 | Vertex AI only | `llm_utils.py` → `ChatAnthropicVertex`; no other LLM backend |
 | Rate limiter | `rate_limiter.py` → `rate_limited_ainvoke`/`rate_limited_invoke` wraps all LLM calls |
+| `--min-severity` analysis gate | `severity_utils.py` + CLI/meta/LLM/static paths; skips below-threshold work (not report-only). See [REDHAT_FORK_FEATURES.md](REDHAT_FORK_FEATURES.md) |
 | No external API keys | Only `ANTHROPIC_VERTEX_PROJECT_ID`, `CLOUD_ML_REGION`, `SKILLSPECTOR_MODEL` |
 | Deps | `langchain-google-vertexai`, `anthropic[vertex]` — never `langchain-anthropic`/`langchain-openai` |
 

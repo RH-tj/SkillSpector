@@ -171,13 +171,15 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
         or MODEL_CONFIG.get(ANALYZER_ID)
         or _SKILLSPECTOR_DEFAULT_MODEL
     )
+    min_severity = state.get("min_severity")
+    min_sev = min_severity if isinstance(min_severity, str) else None
 
     try:
         prompt = ANALYZER_PROMPT.format(manifest_section=_format_manifest(manifest))
-        analyzer = LLMAnalyzerBase(base_prompt=prompt, model=model)
+        analyzer = LLMAnalyzerBase(base_prompt=prompt, model=model, node=ANALYZER_ID)
         batches = analyzer.get_batches(sorted(file_cache), file_cache)
-        results = asyncio.run(analyzer.arun_batches(batches))
-        findings = analyzer.collect_findings(results)
+        results = asyncio.run(analyzer.arun_batches(batches, min_severity=min_sev))
+        findings = analyzer.collect_findings(results, min_severity=min_sev)
         logger.info("%s: %d findings", ANALYZER_ID, len(findings))
         return {"findings": findings}
     except ValueError:

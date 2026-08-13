@@ -82,6 +82,15 @@ class FormatChoice(StrEnum):
     sarif = "sarif"
 
 
+class SeverityChoice(StrEnum):
+    """Minimum finding severity for report output."""
+
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
 class TransportChoice(StrEnum):
     """Transport choices for the MCP server."""
 
@@ -125,12 +134,14 @@ def _scan_state(
     yara_rules_dir: str | None = None,
     baseline: Path | None = None,
     show_suppressed: bool = False,
+    min_severity: SeverityChoice = SeverityChoice.LOW,
 ) -> dict[str, object]:
     """Build initial graph state from scan CLI args."""
     state: dict[str, object] = {
         "input_path": input_path,
         "output_format": format.value,
         "use_llm": not no_llm,
+        "min_severity": min_severity.value,
     }
     if yara_rules_dir is not None:
         state["yara_rules_dir"] = yara_rules_dir
@@ -262,6 +273,22 @@ def scan(
             help="Scan an MCP Registry payload or URL instead of a skill.",
         ),
     ] = False,
+    min_severity: Annotated[
+        SeverityChoice,
+        typer.Option(
+            "--min-severity",
+            help=(
+                "Only analyze and report findings at or above this severity "
+                "(LOW, MEDIUM, HIGH, CRITICAL). Skips lower-severity static "
+                "results, drops them from LLM meta enrichment, skips "
+                "low-yield LLM analyzers (e.g. quality policy at HIGH+), and "
+                "instructs discovery LLMs to only emit HIGH+ findings. "
+                "Risk score and exit code reflect the gated result set. "
+                "Default: LOW (full analysis)."
+            ),
+            case_sensitive=False,
+        ),
+    ] = SeverityChoice.LOW,
 ) -> None:
     """
     Scan a skill for security vulnerabilities.
@@ -272,6 +299,7 @@ def scan(
         skillspector scan ./my-skill/ --format json --output report.json
         skillspector scan https://github.com/user/my-skill --no-llm
         skillspector scan ./skill-collection/ --recursive
+        skillspector scan ./my-skill/ --min-severity HIGH
 
     Environment variables:
 
@@ -333,7 +361,9 @@ def scan(
                     "multi-skill scans; scan each sub-skill with its own baseline"
                 )
                 raise typer.Exit(code=2)
-            _scan_multi_skill(detection, format, output, no_llm, yara_rules_dir, verbose)
+            _scan_multi_skill(
+                detection, format, output, no_llm, yara_rules_dir, verbose, min_severity
+            )
             return
         if not detection.has_root_skill and len(detection.skills) == 0:
             console.print(
@@ -358,6 +388,7 @@ def scan(
             yara_rules_dir=yara_dir,
             baseline=baseline,
             show_suppressed=show_suppressed,
+            min_severity=min_severity,
         )
         if verbose:
             console.print("[dim]Running scan...[/dim]")
@@ -417,6 +448,7 @@ def _scan_multi_skill(
     no_llm: bool,
     yara_rules_dir: Path | None,
     verbose: bool,
+    min_severity: SeverityChoice = SeverityChoice.LOW,
 ) -> None:
     """Scan each detected sub-skill independently and produce a combined report."""
     skills = detection.skills
@@ -431,7 +463,13 @@ def _scan_multi_skill(
             f"  [{i}/{len(skills)}] Scanning [bold]{skill.name}[/bold] ({skill.relative_path}/)"
         )
         yara_dir = str(yara_rules_dir.resolve()) if yara_rules_dir else None
-        state = _scan_state(str(skill.path), format, no_llm, yara_rules_dir=yara_dir)
+        state = _scan_state(
+            str(skill.path),
+            format,
+            no_llm,
+            yara_rules_dir=yara_dir,
+            min_severity=min_severity,
+        )
         trace_config = _build_trace_config(str(skill.path), format, no_llm)
 
         try:
@@ -461,8 +499,13 @@ def _scan_multi_skill(
             continue
         score = result.get("risk_score", 0)
         severity = result.get("risk_severity", "LOW")
-        filtered = result.get("filtered_findings") or result.get("findings")
-        finding_count = len(filtered) if isinstance(filtered, list) else 0
+        # Prefer report-listed count when JSON payload is available (respects --min-severity).
+        payload = _recursive_json_payload(result)
+        if payload is not None and isinstance(payload.get("issues"), list):
+            finding_count = len(cast(list[object], payload["issues"]))
+        else:
+            filtered = result.get("filtered_findings") or result.get("findings")
+            finding_count = len(filtered) if isinstance(filtered, list) else 0
         execution = "failed" if result.get("execution_successful") is False else "successful"
         console.print(
             f"  {skill.name:<30} {score:<8} {severity:<12} {finding_count:<10} {execution:<10}"
@@ -484,8 +527,15 @@ def _scan_multi_skill(
                 combined_skills.append({"name": skill.name, "error": result["error"]})
             else:
                 payload = _recursive_json_payload(result) or {}
-                selected_findings = result.get("filtered_findings") or result.get("findings") or []
-                finding_count = len(selected_findings) if isinstance(selected_findings, list) else 0
+                if isinstance(payload.get("issues"), list):
+                    finding_count = len(cast(list[object], payload["issues"]))
+                else:
+                    selected_findings = (
+                        result.get("filtered_findings") or result.get("findings") or []
+                    )
+                    finding_count = (
+                        len(selected_findings) if isinstance(selected_findings, list) else 0
+                    )
                 entry = {
                     "name": skill.name,
                     "path": skill.relative_path,

@@ -27,6 +27,7 @@ import asyncio
 from skillspector.constants import _SKILLSPECTOR_DEFAULT_MODEL
 from skillspector.llm_analyzer_base import LLMAnalyzerBase
 from skillspector.logging_config import get_logger
+from skillspector.severity_utils import should_skip_llm_analyzer
 from skillspector.state import AnalyzerNodeResponse, SkillspectorState
 
 ANALYZER_ID = "semantic_quality_policy"
@@ -132,6 +133,16 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
     if not state.get("use_llm", True):
         return {"findings": []}
 
+    min_severity = state.get("min_severity")
+    min_sev = min_severity if isinstance(min_severity, str) else None
+    if should_skip_llm_analyzer(ANALYZER_ID, min_sev):
+        logger.info(
+            "%s: skipped (min_severity=%s — quality findings are below threshold)",
+            ANALYZER_ID,
+            min_sev,
+        )
+        return {"findings": []}
+
     file_cache: dict[str, str] = state.get("file_cache") or {}
     files = sorted(file_cache.keys())
     if not files:
@@ -143,10 +154,10 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
     )
 
     try:
-        analyzer = LLMAnalyzerBase(base_prompt=ANALYZER_PROMPT, model=model)
+        analyzer = LLMAnalyzerBase(base_prompt=ANALYZER_PROMPT, model=model, node=ANALYZER_ID)
         batches = analyzer.get_batches(files, file_cache)
-        results = asyncio.run(analyzer.arun_batches(batches))
-        findings = analyzer.collect_findings(results)
+        results = asyncio.run(analyzer.arun_batches(batches, min_severity=min_sev))
+        findings = analyzer.collect_findings(results, min_severity=min_sev)
         logger.info("%s: %d findings", ANALYZER_ID, len(findings))
         return {"findings": findings}
     except ValueError:

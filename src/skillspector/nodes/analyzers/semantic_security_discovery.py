@@ -85,12 +85,14 @@ def node(state: SkillspectorState) -> AnalyzerNodeResponse:
     model = (
         model_config.get(ANALYZER_ID) or model_config.get("default") or _SKILLSPECTOR_DEFAULT_MODEL
     )
+    min_severity = state.get("min_severity")
+    min_sev = min_severity if isinstance(min_severity, str) else None
 
     try:
-        analyzer = LLMAnalyzerBase(base_prompt=ANALYZER_PROMPT, model=model)
+        analyzer = LLMAnalyzerBase(base_prompt=ANALYZER_PROMPT, model=model, node=ANALYZER_ID)
         batches = analyzer.get_batches(components, file_cache)
-        results = asyncio.run(analyzer.arun_batches(batches))
-        findings = analyzer.collect_findings(results)
+        results = asyncio.run(analyzer.arun_batches(batches, min_severity=min_sev))
+        findings = analyzer.collect_findings(results, min_severity=min_sev)
         logger.info("%s: %d findings", ANALYZER_ID, len(findings))
         return {"findings": findings}
     except ValidationError as exc:

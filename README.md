@@ -162,6 +162,28 @@ skillspector scan ./my-skill/ --format markdown --output report.md
 skillspector scan ./my-skill/ --format sarif --output report.sarif
 ```
 
+### Filter by severity
+
+```bash
+# Analyze and report only HIGH and CRITICAL findings
+skillspector scan ./my-skill/ --min-severity HIGH
+
+# Analyze and report only CRITICAL findings
+skillspector scan ./my-skill/ --min-severity CRITICAL
+```
+
+`--min-severity` is an **analysis gate**, not just a report filter:
+
+- Static findings below the threshold are dropped before they enter the pipeline
+- Meta-analyzer LLM enrichment is skipped for below-threshold findings (and for
+  files that only had those findings) — this is the main token saving
+- Low-yield LLM analyzers (e.g. quality policy) are skipped entirely at HIGH+
+- Discovery LLM analyzers are instructed to only emit findings at/above the
+  threshold; any lower results are discarded
+- Risk score and exit code reflect the gated finding set
+
+Default `LOW` keeps full analysis (unchanged behavior).
+
 ### LLM Analysis
 
 This fork uses **Google Vertex AI** exclusively for LLM semantic analysis.
@@ -453,6 +475,10 @@ Options:
   -f, --format [terminal|json|markdown|sarif]  Output format [default: terminal]
   -o, --output PATH                            Output file path
   --no-llm                                     Skip LLM analysis (static only)
+  --min-severity [LOW|MEDIUM|HIGH|CRITICAL]    Analyze/report only findings at
+                                               or above this severity; skips
+                                               lower-severity LLM work
+                                               [default: LOW]
   -V, --verbose                                Show detailed progress
   --help                                       Show this message and exit
 ```

@@ -62,6 +62,37 @@ def test_cli_scan_no_llm(tmp_path: Path) -> None:
     assert result.exit_code == 0
 
 
+def test_cli_scan_min_severity_help() -> None:
+    """--min-severity appears in scan help."""
+    result = runner.invoke(app, ["scan", "--help"])
+    assert result.exit_code == 0
+    assert "--min-severity" in result.output
+
+
+def test_cli_scan_min_severity_high(tmp_path: Path) -> None:
+    """scan with --min-severity HIGH records the filter in JSON output."""
+    import json
+
+    (tmp_path / "SKILL.md").write_text("---\nname: sev-filter\n---\n# Safe", encoding="utf-8")
+    result = runner.invoke(
+        app,
+        [
+            "scan",
+            str(tmp_path),
+            "--format",
+            "json",
+            "--no-llm",
+            "--min-severity",
+            "HIGH",
+        ],
+    )
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["min_severity"] == "HIGH"
+    assert data["hidden_below_min_severity"] == 0
+    assert data["skill"]["name"] == "sev-filter"
+
+
 def test_cli_scan_nonexistent_exits_2() -> None:
     """scan with nonexistent path exits with code 2."""
     result = runner.invoke(app, ["scan", "/nonexistent/path/xyz"])

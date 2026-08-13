@@ -15,6 +15,7 @@ This fork extends NVIDIA's SkillSpector with detection capabilities targeting em
 | Cursor SKILL.md parser | Proposed | Not available |
 | Vertex AI exclusive provider | Implemented | Uses OpenAI/Anthropic/NVIDIA |
 | Adaptive rate limiter | Implemented | Not available |
+| `--min-severity` analysis gate | Implemented | Not available |
 | GitHub Action for CI/CD | Planned | Not available |
 | Container image (quay.io) | Planned | Not available |
 
@@ -176,12 +177,36 @@ skillspector scan ./cursor-skills/my-automation/SKILL.md --no-llm
 ### CI Integration
 
 ```bash
-# Exit with non-zero if any HIGH or CRITICAL findings
-skillspector scan ./skills/ --no-llm --fail-on high
+# Full static+LLM scan, but only analyze/report HIGH and CRITICAL
+skillspector scan ./skills/ --min-severity HIGH --format sarif --output results.sarif
 
-# Generate SARIF for GitHub Code Scanning
-skillspector scan ./skills/ --no-llm --format sarif --output results.sarif
+# Static-only with the same severity gate (no Vertex tokens)
+skillspector scan ./skills/ --no-llm --min-severity HIGH --format json
 ```
+
+---
+
+## `--min-severity` Analysis Gate
+
+Runtime flag that **skips below-threshold analysis work**, not just report filtering. Primary goal: reduce Vertex AI token spend when operators only care about HIGH/CRITICAL findings.
+
+```bash
+skillspector scan ./my-skill/ --min-severity HIGH
+skillspector scan ./my-skill/ --min-severity CRITICAL --format json
+```
+
+| Threshold behavior | Effect |
+|--------------------|--------|
+| Static analyzers | Findings below the threshold are dropped before they enter graph state |
+| `semantic_quality_policy` | Skipped entirely at HIGH+ (no LLM calls) |
+| Discovery LLMs (security / developer intent) | Prompt constrains the model to only emit at/above threshold; lower results discarded |
+| Meta-analyzer | Only enriches findings that meet the threshold; files with only below-threshold findings get **no LLM call** (largest token saving) |
+| Risk score / exit code | Reflect the gated finding set |
+
+Default is `LOW` (full analysis — same as upstream behavior).
+
+**Tracking:** [APPSRE-15069](https://redhat.atlassian.net/browse/APPSRE-15069)  
+**Key files:** `src/skillspector/severity_utils.py`, `cli.py`, `nodes/meta_analyzer.py`, `llm_analyzer_base.py`, `nodes/analyzers/static_runner.py`, `inspection_ledger.py` (`guard_analyzer_node`)
 
 ---
 

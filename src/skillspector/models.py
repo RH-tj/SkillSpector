@@ -18,9 +18,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from uuid import uuid4
 from enum import StrEnum
 from typing import TYPE_CHECKING, Protocol
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from skillspector.state import SkillspectorState
@@ -109,6 +109,7 @@ class Finding:
             "remediation": self.remediation,
             "code_snippet": self.code_snippet or self.context,
             "intent": self.intent,
+            "tags": self.tags,
         }
 
     def __str__(self) -> str:

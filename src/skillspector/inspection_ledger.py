@@ -802,11 +802,16 @@ def guard_analyzer_node(
     analyzer_id: str,
     node: Callable[[object], dict[str, object]],
 ) -> Callable[[object], dict[str, object]]:
-    """Convert an unexpected analyzer exception into safe, terminal ledger facts."""
+    """Convert an unexpected analyzer exception into safe, terminal ledger facts.
+
+    Also enforces ``min_severity`` on returned findings so analyzers that do
+    not filter themselves still drop below-threshold results before they enter
+    graph state (and before meta-analyzer LLM enrichment).
+    """
 
     def guarded(state: object) -> dict[str, object]:
         try:
-            return node(state)
+            result = node(state)
         except Exception as exc:  # pragma: no cover - exact exception is node-dependent
             logger.warning("Analyzer %s raised %s", analyzer_id, type(exc).__name__, exc_info=True)
             state_mapping = cast(Mapping[str, object], state)
@@ -851,5 +856,27 @@ def guard_analyzer_node(
                     )
                 ],
             }
+
+        state_mapping = cast(Mapping[str, object], state)
+        min_severity_raw = state_mapping.get("min_severity")
+        min_severity = min_severity_raw if isinstance(min_severity_raw, str) else None
+        raw_findings = result.get("findings")
+        if isinstance(raw_findings, list) and raw_findings:
+            # Local import avoids a circular dependency at module load time.
+            from skillspector.models import Finding
+            from skillspector.severity_utils import filter_findings_by_min_severity
+
+            typed = [f for f in raw_findings if isinstance(f, Finding)]
+            other = [f for f in raw_findings if not isinstance(f, Finding)]
+            kept, dropped = filter_findings_by_min_severity(typed, min_severity)
+            if dropped:
+                logger.debug(
+                    "%s: guard dropped %d finding(s) below min_severity=%s",
+                    analyzer_id,
+                    dropped,
+                    min_severity,
+                )
+            result = {**result, "findings": kept + other}
+        return result
 
     return guarded

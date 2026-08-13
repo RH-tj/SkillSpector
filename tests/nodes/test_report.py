@@ -29,6 +29,11 @@ from skillspector.nodes.report import (
     _compute_risk_score,
     report,
 )
+from skillspector.severity_utils import (
+    filter_findings_by_min_severity,
+    severity_constraint_prompt,
+    should_skip_llm_analyzer,
+)
 from skillspector.state import SkillspectorState
 
 
@@ -548,6 +553,152 @@ class TestReportNode:
         assert result["risk_score"] < 4 * 25
 
 
+# --- Min-severity report filtering ---
+
+
+class TestFilterFindingsByMinSeverity:
+    """Unit tests for filter_findings_by_min_severity helper."""
+
+    def test_low_or_none_keeps_all(self) -> None:
+        findings = [
+            _finding("A", "LOW"),
+            _finding("B", "MEDIUM"),
+            _finding("C", "HIGH"),
+            _finding("D", "CRITICAL"),
+        ]
+        for threshold in (None, "LOW", "low"):
+            kept, hidden = filter_findings_by_min_severity(findings, threshold)
+            assert len(kept) == 4
+            assert hidden == 0
+
+    def test_high_keeps_high_and_critical(self) -> None:
+        findings = [
+            _finding("A", "LOW"),
+            _finding("B", "MEDIUM"),
+            _finding("C", "HIGH"),
+            _finding("D", "CRITICAL"),
+        ]
+        kept, hidden = filter_findings_by_min_severity(findings, "HIGH")
+        assert [f.rule_id for f in kept] == ["C", "D"]
+        assert hidden == 2
+
+    def test_critical_keeps_only_critical(self) -> None:
+        findings = [
+            _finding("A", "HIGH"),
+            _finding("B", "CRITICAL"),
+        ]
+        kept, hidden = filter_findings_by_min_severity(findings, "CRITICAL")
+        assert [f.rule_id for f in kept] == ["B"]
+        assert hidden == 1
+
+    def test_unknown_severity_treated_as_low(self) -> None:
+        findings = [_finding("A", "LOW")]
+        findings[0].severity = "WEIRD"
+        kept, hidden = filter_findings_by_min_severity(findings, "MEDIUM")
+        assert kept == []
+        assert hidden == 1
+
+
+class TestReportMinSeverityFilter:
+    """Report node gates listed issues and risk score by min_severity."""
+
+    def test_json_filters_issues_and_score(self) -> None:
+        # One HIGH (25) + one LOW (5); with min_severity HIGH only HIGH counts.
+        state: SkillspectorState = {
+            "filtered_findings": [
+                _finding("P1", "HIGH", confidence=1.0),
+                _finding("L1", "LOW", confidence=1.0),
+            ],
+            "component_metadata": [],
+            "has_executable_scripts": False,
+            "manifest": {"name": "filter-test"},
+            "skill_path": "/tmp/skill",
+            "output_format": "json",
+            "min_severity": "HIGH",
+        }
+        result = report(state)
+        assert result["risk_score"] == 25
+        body = json.loads(result["report_body"])
+        assert len(body["issues"]) == 1
+        assert body["issues"][0]["id"] == "P1"
+        assert body["min_severity"] == "HIGH"
+        assert body["hidden_below_min_severity"] == 1
+
+    def test_markdown_and_terminal_mention_skipped_count(self) -> None:
+        findings = [
+            _finding("P1", "HIGH", confidence=1.0),
+            _finding("L1", "LOW", confidence=1.0),
+            _finding("M1", "MEDIUM", confidence=1.0),
+        ]
+        for fmt in ("markdown", "terminal"):
+            state: SkillspectorState = {
+                "filtered_findings": findings,
+                "component_metadata": [],
+                "has_executable_scripts": False,
+                "manifest": {"name": "filter-test"},
+                "skill_path": "/tmp/skill",
+                "output_format": fmt,
+                "min_severity": "HIGH",
+            }
+            body = report(state)["report_body"]
+            assert "2 findings below HIGH skipped (--min-severity)" in body
+            assert "P1" in body
+            assert "L1" not in body
+            assert "M1" not in body
+
+    def test_sarif_omits_low_severity_results(self) -> None:
+        state: SkillspectorState = {
+            "filtered_findings": [
+                _finding("P1", "HIGH", confidence=1.0),
+                _finding("L1", "LOW", confidence=1.0),
+            ],
+            "component_metadata": [],
+            "has_executable_scripts": False,
+            "manifest": {},
+            "skill_path": None,
+            "output_format": "sarif",
+            "min_severity": "HIGH",
+        }
+        result = report(state)
+        data = json.loads(result["report_body"])
+        results = data["runs"][0]["results"]
+        rule_ids = {r["ruleId"] for r in results}
+        assert rule_ids == {"P1"}
+
+    def test_default_shows_all_severities(self) -> None:
+        state: SkillspectorState = {
+            "filtered_findings": [
+                _finding("P1", "HIGH", confidence=1.0),
+                _finding("L1", "LOW", confidence=1.0),
+            ],
+            "component_metadata": [],
+            "has_executable_scripts": False,
+            "manifest": {},
+            "skill_path": None,
+            "output_format": "json",
+        }
+        body = json.loads(report(state)["report_body"])
+        assert len(body["issues"]) == 2
+        assert "min_severity" not in body
+
+
+class TestSeverityUtilsAnalysisGate:
+    """Analysis-gate helpers used by LLM/static skip paths."""
+
+    def test_severity_constraint_prompt_for_high(self) -> None:
+        text = severity_constraint_prompt("HIGH")
+        assert "ONLY report findings with severity HIGH or higher" in text
+        assert "Do NOT report LOW or MEDIUM" in text
+        assert severity_constraint_prompt("LOW") == ""
+        assert severity_constraint_prompt(None) == ""
+
+    def test_should_skip_quality_policy_at_high(self) -> None:
+        assert should_skip_llm_analyzer("semantic_quality_policy", "HIGH")
+        assert should_skip_llm_analyzer("semantic_quality_policy", "CRITICAL")
+        assert not should_skip_llm_analyzer("semantic_quality_policy", "MEDIUM")
+        assert not should_skip_llm_analyzer("semantic_security_discovery", "HIGH")
+
+
 def test_report_executable_scripts_multiplier() -> None:
     """1.3x multiplier applied only to findings from executable files."""
     # 2 HIGH findings in run.py = 2 × 25 × 1.3 = 65 (float-based accumulation)
@@ -579,8 +730,14 @@ def test_report_doc_findings_no_multiplier() -> None:
             _finding("P2", "HIGH", file="SKILL.md"),
         ],
         "component_metadata": [
-            {"path": "SKILL.md", "type": "markdown", "lines": 10, "executable": False, "size_bytes": 500},
-            {"path": "run.py", "type": "python", "lines": 5, "executable": True, "size_bytes": 200}
+            {
+                "path": "SKILL.md",
+                "type": "markdown",
+                "lines": 10,
+                "executable": False,
+                "size_bytes": 500,
+            },
+            {"path": "run.py", "type": "python", "lines": 5, "executable": True, "size_bytes": 200},
         ],
         "has_executable_scripts": True,
         "manifest": {},

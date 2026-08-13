@@ -60,6 +60,11 @@ from skillspector.sarif_models import (
     SarifTool,
     validate_sarif_report,
 )
+from skillspector.severity_utils import (
+    filter_findings_by_min_severity,
+    is_severityity_filter_active,
+    min_severity_skip_notice,
+)
 from skillspector.state import SkillspectorState
 from skillspector.suppression import Baseline, SuppressedFinding, partition_findings
 
@@ -477,6 +482,8 @@ def _format_terminal(
     show_suppressed: bool = False,
     analysis_completeness: Mapping[str, object] | None = None,
     execution_successful: bool = True,
+    hidden_below_min_severity: int = 0,
+    min_severity: str | None = None,
 ) -> str:
     """Generate Rich terminal output and export as string."""
     suppressed = suppressed or []
@@ -541,6 +548,10 @@ def _format_terminal(
             )
         )
 
+    filter_notice = min_severity_skip_notice(hidden_below_min_severity, min_severity)
+    if filter_notice:
+        console.print(f"\n[dim]{filter_notice}[/dim]")
+
     if findings:
         console.print("\n")
         console.print(f"[bold]Issues ({len(findings)})[/bold]\n")
@@ -560,7 +571,10 @@ def _format_terminal(
                 console.print(f"    [dim]Remediation:[/dim] {(f.remediation or '')[:150]}...")
             console.print()
     else:
-        console.print("\n[green]No security issues detected.[/green]\n")
+        if filter_notice:
+            console.print("\n[green]No issues at or above the severity filter.[/green]\n")
+        else:
+            console.print("\n[green]No security issues detected.[/green]\n")
 
     if suppressed:
         console.print(
@@ -675,6 +689,8 @@ def _format_json(
     analysis_completeness: Mapping[str, object] | None = None,
     suppressed: list[SuppressedFinding] | None = None,
     execution_successful: bool = True,
+    hidden_below_min_severity: int = 0,
+    min_severity: str | None = None,
 ) -> str:
     """Generate JSON report string."""
     suppressed = suppressed or []
@@ -711,6 +727,9 @@ def _format_json(
         ),
         "execution_successful": execution_successful,
     }
+    if min_severity and is_severityity_filter_active(min_severity):
+        data["min_severity"] = min_severity.upper()
+        data["hidden_below_min_severity"] = hidden_below_min_severity
     data["analysis_completeness"] = dict(analysis_completeness or {})
     return json.dumps(data, indent=2)
 
@@ -789,6 +808,8 @@ def _format_markdown(
     show_suppressed: bool = False,
     analysis_completeness: Mapping[str, object] | None = None,
     execution_successful: bool = True,
+    hidden_below_min_severity: int = 0,
+    min_severity: str | None = None,
 ) -> str:
     """Generate Markdown report string."""
     suppressed = suppressed or []
@@ -805,6 +826,11 @@ def _format_markdown(
     degraded_notice = _llm_degradation_notice(use_llm, llm_call_log or [])
     if degraded_notice:
         lines.append(f"> ⚠️ **Degraded scan:** {degraded_notice}")
+        lines.append("")
+
+    filter_notice = min_severity_skip_notice(hidden_below_min_severity, min_severity)
+    if filter_notice:
+        lines.append(f"> _{filter_notice}_")
         lines.append("")
 
     lines.append("## Risk Assessment\n")
@@ -829,7 +855,10 @@ def _format_markdown(
 
     lines.append(f"## Issues ({len(findings)})\n")
     if not findings:
-        lines.append("No security issues detected.\n")
+        if filter_notice:
+            lines.append("No issues at or above the severity filter.\n")
+        else:
+            lines.append("No security issues detected.\n")
     else:
         severity_emoji = {"LOW": "🟢", "MEDIUM": "🟡", "HIGH": "🔴", "CRITICAL": "🔴"}
         for f in findings:
@@ -941,8 +970,16 @@ def report(state: SkillspectorState) -> dict[str, object]:
         scanner_version=skillspector_version,
     )
     findings_for_scoring = deduplicate(active_findings)
+    min_severity_raw = state.get("min_severity")
+    min_severity = min_severity_raw if isinstance(min_severity_raw, str) else None
+    # Analysis stages drop below-threshold findings; report filter is defense in depth.
+    display_findings, hidden_below_min_severity = filter_findings_by_min_severity(
+        active_findings, min_severity
+    )
+    # Score only what remains after the severity gate so exit codes match the scan scope.
+    scoring_findings, _ = filter_findings_by_min_severity(findings_for_scoring, min_severity)
     risk_score, risk_severity, risk_recommendation = _compute_risk_score(
-        findings_for_scoring, has_executable_scripts, component_metadata
+        scoring_findings, has_executable_scripts, component_metadata
     )
     exceptions = analysis_completeness.get("ledger_exceptions", [])
     fatal_exception = (
@@ -961,7 +998,7 @@ def report(state: SkillspectorState) -> dict[str, object]:
         risk_recommendation = "CAUTION"
 
     sarif_report = _build_sarif(
-        active_findings,
+        display_findings,
         suppressed,
         degraded_notice=degraded_notice,
         analysis_completeness=analysis_completeness,
@@ -969,7 +1006,7 @@ def report(state: SkillspectorState) -> dict[str, object]:
     )
     if output_format == "terminal":
         report_body = _format_terminal(
-            active_findings,
+            display_findings,
             component_metadata,
             manifest,
             skill_path,
@@ -983,10 +1020,12 @@ def report(state: SkillspectorState) -> dict[str, object]:
             show_suppressed=show_suppressed,
             analysis_completeness=analysis_completeness,
             execution_successful=execution_successful,
+            hidden_below_min_severity=hidden_below_min_severity,
+            min_severity=min_severity,
         )
     elif output_format == "json":
         report_body = _format_json(
-            active_findings,
+            display_findings,
             component_metadata,
             manifest,
             skill_path,
@@ -1000,10 +1039,12 @@ def report(state: SkillspectorState) -> dict[str, object]:
             analysis_completeness=analysis_completeness,
             suppressed=suppressed,
             execution_successful=execution_successful,
+            hidden_below_min_severity=hidden_below_min_severity,
+            min_severity=min_severity,
         )
     elif output_format == "markdown":
         report_body = _format_markdown(
-            active_findings,
+            display_findings,
             component_metadata,
             manifest,
             skill_path,
@@ -1017,15 +1058,19 @@ def report(state: SkillspectorState) -> dict[str, object]:
             show_suppressed=show_suppressed,
             analysis_completeness=analysis_completeness,
             execution_successful=execution_successful,
+            hidden_below_min_severity=hidden_below_min_severity,
+            min_severity=min_severity,
         )
     else:
         report_body = json.dumps(sarif_report, indent=2)
 
     logger.debug(
-        "Report generated: format=%s, findings_count=%d, suppressed_count=%d",
+        "Report generated: format=%s, findings_count=%d, suppressed_count=%d, "
+        "hidden_below_min_severity=%d",
         output_format,
-        len(active_findings),
+        len(display_findings),
         len(suppressed),
+        hidden_below_min_severity,
     )
     return {
         "sarif_report": sarif_report,

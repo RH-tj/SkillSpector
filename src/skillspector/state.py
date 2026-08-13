@@ -112,6 +112,11 @@ class SkillspectorState(TypedDict, total=False):
     show_suppressed: bool
     suppressed_findings: list[object]
 
+    # Analysis gate: skip findings and LLM work below this severity
+    # (LOW | MEDIUM | HIGH | CRITICAL). Report/score only include results
+    # that meet the threshold.
+    min_severity: str
+
 
 class AnalyzerNodeResponse(TypedDict):
     """Strict analyzer update payload for graph state."""
@@ -128,9 +133,7 @@ class MetaAnalyzerResponse(TypedDict, total=False):
     analyzer_status_events: list[AnalyzerStatusEvent]
 
 
-def llm_call_record(
-    node: str, *, ok: bool, error: str | None = None
-) -> LLMCallRecord:
+def llm_call_record(node: str, *, ok: bool, error: str | None = None) -> LLMCallRecord:
     """Build a telemetry record for the llm_call_log reducer."""
     rec: LLMCallRecord = {"node": node, "ok": ok}
     if error is not None:

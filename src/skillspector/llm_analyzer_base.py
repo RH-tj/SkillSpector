@@ -50,6 +50,11 @@ from skillspector.logging_config import get_logger
 from skillspector.model_info import get_max_input_tokens
 from skillspector.models import Finding
 from skillspector.rate_limiter import rate_limited_ainvoke, rate_limited_invoke
+from skillspector.severity_utils import (
+    filter_findings_by_min_severity,
+    normalize_min_severity,
+    severity_constraint_prompt,
+)
 
 logger = get_logger(__name__)
 
@@ -373,7 +378,7 @@ def number_lines(content: str, start_line: int = 1) -> str:
 
 BASE_ANALYSIS_PROMPT = """\
 {analyzer_prompt}
-
+{severity_constraint}
 Analyze the following skill file for security issues matching the criteria above.
 Reference line numbers (shown as L-prefixes) when reporting findings.
 
@@ -516,10 +521,20 @@ class LLMAnalyzerBase:
         The default wraps :attr:`base_prompt` with line-numbered file content
         so the LLM can reference exact line numbers in its findings.
         Override in subclasses that need a custom prompt layout.
+
+        Pass ``min_severity`` in *kwargs* to instruct the model to only emit
+        findings at or above that threshold (token savings on output / focus).
         """
         numbered = number_lines(batch.content, batch.start_line)
+        min_severity = kwargs.get("min_severity")
+        severity_text = ""
+        if isinstance(min_severity, str) or min_severity is None:
+            severity_text = severity_constraint_prompt(
+                min_severity if isinstance(min_severity, str) else None
+            )
         return BASE_ANALYSIS_PROMPT.format(
             analyzer_prompt=self.base_prompt,
+            severity_constraint=severity_text,
             file_label=batch.file_label,
             numbered_content=numbered,
         )
@@ -779,6 +794,8 @@ class LLMAnalyzerBase:
     def collect_findings(
         self,
         batch_results: list[tuple[Batch, list]],
+        *,
+        min_severity: str | None = None,
     ) -> list[Finding]:
         """Flatten per-batch results into a single :class:`Finding` list.
 
@@ -786,7 +803,19 @@ class LLMAnalyzerBase:
         returns :class:`Finding` objects.  A typical node can do::
 
             batches = analyzer.get_batches(files, file_cache)
-            results = analyzer.run_batches(batches)
-            return {"findings": analyzer.collect_findings(results)}
+            results = analyzer.run_batches(batches, min_severity=min_severity)
+            return {"findings": analyzer.collect_findings(results, min_severity=min_severity)}
+
+        When *min_severity* is set above LOW, findings below the threshold are
+        dropped (defense in depth if the model ignored the prompt constraint).
         """
-        return [f for _, items in batch_results for f in items]
+        findings = [f for _, items in batch_results for f in items]
+        kept, dropped = filter_findings_by_min_severity(findings, min_severity)
+        if dropped:
+            logger.debug(
+                "%s: dropped %d LLM finding(s) below min_severity=%s",
+                self._node,
+                dropped,
+                normalize_min_severity(min_severity),
+            )
+        return kept

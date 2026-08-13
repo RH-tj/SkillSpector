@@ -35,6 +35,7 @@ from skillspector.python_ast import (
     ParsedPythonFile,
     get_python_ast,
 )
+from skillspector.severity_utils import filter_findings_by_min_severity
 from skillspector.state import AnalyzerNodeResponse
 
 from .common import is_code_example
@@ -423,7 +424,15 @@ def run_static_patterns(
             continue
         findings.extend(_scan_path(path, content, pattern_modules, python_ast_cache_key))
 
-    return findings
+    min_severity = cast(str | None, state.get("min_severity"))
+    kept, dropped = filter_findings_by_min_severity(findings, min_severity)
+    if dropped:
+        logger.debug(
+            "Static patterns: dropped %d finding(s) below min_severity=%s",
+            dropped,
+            min_severity,
+        )
+    return kept
 
 
 def run_static_patterns_with_ledger(
@@ -500,8 +509,17 @@ def run_static_patterns_with_ledger(
                     )
         events.append(event)
 
+    min_severity = cast(str | None, state.get("min_severity"))
+    kept, dropped = filter_findings_by_min_severity(findings, min_severity)
+    if dropped:
+        logger.debug(
+            "%s: dropped %d finding(s) below min_severity=%s",
+            analyzer_id,
+            dropped,
+            min_severity,
+        )
     return {
-        "findings": findings,
+        "findings": kept,
         "inspection_ledger": events,
         "analyzer_status_events": [analyzer_status_for_events(analyzer_id, events)],
     }

@@ -52,6 +52,10 @@ from skillspector.nodes.analyzers.pattern_defaults import (
     get_explanation,
     get_remediation,
 )
+from skillspector.severity_utils import (
+    filter_findings_by_min_severity,
+    normalize_min_severity,
+)
 from skillspector.state import MetaAnalyzerResponse, SkillspectorState, llm_call_record
 
 logger = get_logger(__name__)
@@ -613,12 +617,26 @@ def meta_analyzer(state: SkillspectorState) -> MetaAnalyzerResponse:
     has at least one finding gets its own LLM call (or multiple calls if
     the file is too large for the model's input budget).
 
-    Fail-closed: on LLM failure, passes all findings through with defaults
-    rather than silently dropping them.
+    When ``min_severity`` is set above LOW, findings below the threshold are
+    dropped before any LLM work so meta enrichment does not spend tokens on
+    them. Files whose remaining findings are empty are skipped entirely.
+
+    Fail-closed: on LLM failure, passes remaining (threshold-gated) findings
+    through with defaults rather than silently dropping them.
     """
     import asyncio
 
     findings: list[Finding] = state.get("findings", [])
+    min_severity_raw = state.get("min_severity")
+    min_severity = min_severity_raw if isinstance(min_severity_raw, str) else None
+    findings, dropped = filter_findings_by_min_severity(findings, min_severity)
+    if dropped:
+        logger.info(
+            "Meta-analyzer: skipped %d finding(s) below min_severity=%s (no LLM enrichment)",
+            dropped,
+            normalize_min_severity(min_severity),
+        )
+
     if not findings:
         return {
             "filtered_findings": [],

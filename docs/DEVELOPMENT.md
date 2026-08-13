@@ -2,6 +2,12 @@
 
 This guide helps developers understand, run, test, and extend the LangGraph-based skillspector workflow.
 
+**Also see:**
+
+- [CODEBASE_MAP.md](CODEBASE_MAP.md) — capability → file/function map and execution call graph
+- [WHY_LLM_ANALYSIS.md](WHY_LLM_ANALYSIS.md) — why LLM nodes exist vs static-only (`--no-llm`)
+- [CAPABILITIES.md](CAPABILITIES.md) — detection inventory and architecture primer
+
 ---
 
 ## 1. Overview

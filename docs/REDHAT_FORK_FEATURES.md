@@ -227,6 +227,8 @@ See the main [README.md](../README.md) for setup instructions.
 
 ## References
 
+- [Codebase map and call graph](CODEBASE_MAP.md)
+- [Why LLM analysis exists](WHY_LLM_ANALYSIS.md)
 - Ye, Cui, Hadfield-Menell. "Prompt Injection as Role Confusion." ICML 2026. [arxiv.org/abs/2603.12277](https://arxiv.org/abs/2603.12277)
 - Skill-Inject Benchmark (2026). Skill-file prompt injection attack evaluation.
 - OWASP. "LLM Top 10 2025." [owasp.org/www-project-top-10-for-large-language-model-applications](https://owasp.org/www-project-top-10-for-large-language-model-applications/)

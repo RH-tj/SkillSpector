@@ -95,6 +95,10 @@ SkillSpector helps you answer: **"Is this skill safe to install?"**
 ## Documentation
 
 - **[Development guide](docs/DEVELOPMENT.md)** — Architecture, package layout, and how to extend the analyzer pipeline.
+- **[Codebase map](docs/CODEBASE_MAP.md)** — Capability → file/function map and execution call graph.
+- **[Why LLM analysis](docs/WHY_LLM_ANALYSIS.md)** — Why the optional LLM layer exists vs static-only (`--no-llm`).
+- **[Capabilities primer](docs/CAPABILITIES.md)** — Detection inventory and architecture overview.
+- **[Red Hat fork features](docs/REDHAT_FORK_FEATURES.md)** — Vertex-only and fork-specific behavior.
 
 ## Features
 

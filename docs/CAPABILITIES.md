@@ -20,6 +20,10 @@ It is **not** a general-purpose SAST tool. It targets threat vectors unique to
 AI-agent ecosystems: prompt injection, tool poisoning, data exfiltration via
 agentic channels, excessive autonomy, and skill supply-chain compromise.
 
+**Navigation:** [CODEBASE_MAP.md](CODEBASE_MAP.md) (files, functions, call graph).
+**Why an LLM at all?** [WHY_LLM_ANALYSIS.md](WHY_LLM_ANALYSIS.md) — static is the
+baseline; LLM is optional depth/precision (`--no-llm` is a first-class mode).
+
 ---
 
 ## 2. Architecture Overview
@@ -148,6 +152,8 @@ Specialized for the **Model Context Protocol** tool ecosystem.
 
 These use an LLM (Vertex AI / Claude in this fork) to perform deep semantic
 analysis that regex patterns cannot achieve. Skipped when `--no-llm` is passed.
+See [WHY_LLM_ANALYSIS.md](WHY_LLM_ANALYSIS.md) for the rationale, limits, and how
+LLM output is (and is not) evaluated in tests.
 
 | Analyzer | Rule IDs | What the LLM evaluates |
 |----------|----------|------------------------|
